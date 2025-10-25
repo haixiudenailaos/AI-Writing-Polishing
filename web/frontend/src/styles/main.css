@@ -1,0 +1,247 @@
+/* VSCode风格主题样式 */
+
+/* 暗色主题 */
+.theme-dark {
+  --background: #1e1e1e;
+  --foreground: #ffffff;
+  --editor-background: #1e1e1e;
+  --editor-foreground: #ffffff;
+  --line-number-background: #252526;
+  --line-number-foreground: #858585;
+  --selection: #264f78;
+  --accent: #0e639c;
+  --panel-background: #252526;
+  --output-foreground: #ffffff;
+  --original-background: #5a1f1a;
+  --polished-background: #094124;
+  --button-background: #3a3d41;
+  --button-foreground: #ffffff;
+  --border-color: #3c3c3c;
+  --muted-foreground: #9c9c9c;
+  --title-bar-background: #2d2d30;
+  --title-bar-foreground: #ffffff;
+  --input-background: #3c3c3c;
+  --input-border: #5a5a5a;
+  --input-foreground: #ffffff;
+  --focus-border: #007acc;
+  --button-hover-background: #1177bb;
+  --scrollbar-thumb: #424242;
+  --scrollbar-track: #1e1e1e;
+}
+
+/* 亮色主题 */
+.theme-light {
+  --background: #ffffff;
+  --foreground: #000000;
+  --editor-background: #ffffff;
+  --editor-foreground: #000000;
+  --line-number-background: #f3f3f3;
+  --line-number-foreground: #616161;
+  --selection: #add6ff;
+  --accent: #0e639c;
+  --panel-background: #f3f3f3;
+  --output-foreground: #000000;
+  --original-background: #ffe4e1;
+  --polished-background: #e5f7ef;
+  --button-background: #e1e4e8;
+  --button-foreground: #000000;
+  --border-color: #d4d4d4;
+  --muted-foreground: #707070;
+  --title-bar-background: #f3f3f3;
+  --title-bar-foreground: #000000;
+  --input-background: #ffffff;
+  --input-border: #cccccc;
+  --input-foreground: #000000;
+  --focus-border: #0078d4;
+  --button-hover-background: #d0d7de;
+  --scrollbar-thumb: #c1c1c1;
+  --scrollbar-track: #f3f3f3;
+}
+
+/* 暗青色主题 */
+.theme-teal {
+  --background: #011627;
+  --foreground: #ffffff;
+  --editor-background: #011627;
+  --editor-foreground: #ffffff;
+  --line-number-background: #012840;
+  --line-number-foreground: #4c8f9d;
+  --selection: #144f71;
+  --accent: #0db9d7;
+  --panel-background: #012840;
+  --output-foreground: #ffffff;
+  --original-background: #3b1e35;
+  --polished-background: #0b3d31;
+  --button-background: #024d63;
+  --button-foreground: #ffffff;
+  --border-color: #02526f;
+  --muted-foreground: #6fb7c7;
+  --title-bar-background: #012840;
+  --title-bar-foreground: #ffffff;
+  --input-background: #012840;
+  --input-border: #02526f;
+  --input-foreground: #ffffff;
+  --focus-border: #0db9d7;
+  --button-hover-background: #0369a1;
+  --scrollbar-thumb: #02526f;
+  --scrollbar-track: #011627;
+}
+
+/* 护眼主题 */
+.theme-eyeCare {
+  --background: #e7f4ea;
+  --foreground: #0b1f10;
+  --editor-background: #e7f4ea;
+  --editor-foreground: #0b1f10;
+  --line-number-background: #ddefe3;
+  --line-number-foreground: #5f7b68;
+  --selection: #b7d8c7;
+  --accent: #2f7a5f;
+  --panel-background: #ddefe3;
+  --output-foreground: #0b1f10;
+  --original-background: #f6efe8;
+  --polished-background: #d8f2de;
+  --button-background: #d0e9d6;
+  --button-foreground: #0b1f10;
+  --border-color: #bcd6c5;
+  --muted-foreground: #5f7b68;
+  --title-bar-background: #ddefe3;
+  --title-bar-foreground: #0b1f10;
+  --input-background: #f0f7f3;
+  --input-border: #bcd6c5;
+  --input-foreground: #0b1f10;
+  --focus-border: #2f7a5f;
+  --button-hover-background: #c1e1cc;
+  --scrollbar-thumb: #bcd6c5;
+  --scrollbar-track: #e7f4ea;
+}
+
+/* 全局样式 */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", "Helvetica Neue", Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--foreground);
+  background-color: var(--background);
+  overflow: hidden;
+}
+
+/* 滚动条样式 */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 5px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--accent);
+}
+
+/* 按钮样式 */
+button {
+  padding: 6px 14px;
+  background-color: var(--button-background);
+  color: var(--button-foreground);
+  border: 1px solid var(--border-color);
+  border-radius: 2px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: background-color 0.2s, border-color 0.2s;
+}
+
+button:hover {
+  background-color: var(--button-hover-background);
+  border-color: var(--focus-border);
+}
+
+button:active {
+  opacity: 0.8;
+}
+
+button:focus {
+  outline: 1px solid var(--focus-border);
+  outline-offset: 2px;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* 输入框样式 */
+input, textarea {
+  background-color: var(--input-background);
+  color: var(--input-foreground);
+  border: 1px solid var(--input-border);
+  padding: 6px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  border-radius: 2px;
+  transition: border-color 0.2s;
+}
+
+input:focus, textarea:focus {
+  outline: 1px solid var(--focus-border);
+  border-color: var(--focus-border);
+}
+
+/* 选择框样式 */
+select {
+  background-color: var(--input-background);
+  color: var(--input-foreground);
+  border: 1px solid var(--input-border);
+  padding: 6px 10px;
+  font-size: 13px;
+  border-radius: 2px;
+  cursor: pointer;
+}
+
+select:focus {
+  outline: 1px solid var(--focus-border);
+  border-color: var(--focus-border);
+}
+
+/* 分割线 */
+.divider {
+  width: 1px;
+  background-color: var(--border-color);
+}
+
+/* 过渡动画 */
+.fade-enter-active, .fade-leave-active {
+  transition: opacity 0.3s;
+}
+
+.fade-enter-from, .fade-leave-to {
+  opacity: 0;
+}
+
+/* 加载动画 */
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.loading-spinner {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--border-color);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
