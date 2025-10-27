@@ -225,11 +225,12 @@ class AIClient:
             self._model = api_config.model
             self._base_url = api_config.base_url
     
-    def predict_plot_continuation(self, full_text: str) -> str:
+    def predict_plot_continuation(self, full_text: str, style_prompt: str = "") -> str:
         """预测剧情发展，生成接下来两行内容
         
         Args:
             full_text: 当前编辑器中的全部文本内容
+            style_prompt: 风格提示词（可选），将作为人设发送给AI
             
         Returns:
             预测的接下来两行剧情内容
@@ -237,20 +238,37 @@ class AIClient:
         if not full_text or not full_text.strip():
             raise AIError("文本内容为空，无法预测剧情。")
         
+        # 构建基础系统提示词
+        system_content = (
+            "你是一位资深中文小说作家，擅长剧情预测与续写。"
+        )
+        
+        # 如果有风格提示词，将其作为人设的一部分
+        if style_prompt:
+            system_content += f"\n\n【你的人设与风格要求】\n{style_prompt}"
+        
+        # 添加任务要求
+        system_content += (
+            "\n\n【任务要求】\n"
+            "请根据用户提供的现有剧情，严格按照上述人设与风格要求，预测并生成接下来最合理的两行内容。\n"
+            "注意事项：\n"
+            "1）严格遵守人设与风格要求，保持风格统一；\n"
+            "2）剧情连贯自然，符合逻辑；\n"
+            "3）只输出两行文本，不要任何解释或标注；\n"
+            "4）每行文本应独立成句，行与行之间用换行符分隔；\n"
+            "5）确保输出的是从当前文本结尾处往下的两行内容。"
+        )
+        
         payload = {
             "model": self._model,
             "messages": [
                 {
                     "role": "system",
-                    "content": (
-                        "你是一位资深中文小说作家，擅长剧情预测与续写。"
-                        "请根据用户提供的现有剧情，预测并生成接下来最合理的两行内容。"
-                        "要求：1）保持风格统一；2）剧情连贯自然；3）只输出两行文本，不要任何解释；4）每行文本应独立成句。"
-                    ),
+                    "content": system_content,
                 },
                 {
                     "role": "user",
-                    "content": f"现有剧情：\n{full_text}\n\n请预测接下来的两行剧情："
+                    "content": f"现有剧情：\n{full_text}\n\n请预测接下来的两行剧情（只输出两行文本，每行一句完整的话）："
                 },
             ],
             "temperature": 0.7,  # 使用较高温度以增加创造性
