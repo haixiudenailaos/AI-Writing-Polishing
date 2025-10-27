@@ -1,0 +1,37 @@
+{
+  "api_config": {
+    "api_key": "sk-lkyueaxfcbidfnqdjovopzseiexnloloieuwbrzfpniozmet",
+    "base_url": "https://api.siliconflow.cn/v1/chat/completions",
+    "model": "deepseek-ai/DeepSeek-V3.2-Exp",
+    "timeout": 45
+  },
+  "polish_styles": {
+    "preset_styles": [
+      "standard",
+      "literary",
+      "concise",
+      "emotional"
+    ],
+    "custom_styles": [
+      {
+        "id": "fa6f71af-a5c7-4313-b99b-d270e191e2fa",
+        "name": "1",
+        "prompt": "请以专业小说家的风格进行写作，确保以下要点：\n1. **目标**：创作具有文学深度和艺术感染力的文本，展现人物塑造、情节推进与主题表达的成熟技巧。\n2. **风格要点**：\n   - 语言精炼而富有诗意，善用比喻、象征等修辞手法。\n   - 注重细节描写，营造沉浸式场景与情感氛围。\n   - 叙事节奏张弛有度，对话自然且符合人物性格。\n   - 体现对人性、社会或哲理的深刻洞察。\n3. **约束**：\n   - 避免过度堆砌辞藻，保持内容连贯与逻辑清晰。\n   - 不偏离主题或故事主线。\n4. **输出要求**：\n   - 文本结构完整，可独立成篇或作为章节。\n   - 字数根据需求灵活调整，但需保证表达充分。",
+        "is_preset": false,
+        "parameters": {}
+      },
+      {
+        "id": "9e0b83a6-02fa-4787-a56f-f650df2fc29c",
+        "name": "1",
+        "prompt": "你是一位资深小说作家，请对以下文本进行专业润色。润色时需注重以下方面：\n\n1. **目标**：提升文本的文学性、流畅度与感染力，使其符合小说创作的专业标准。\n2. **风格要点**：\n   - 语言生动形象，善用比喻、拟人等修辞手法。\n   - 叙事节奏张弛有度，情节推进自然。\n   - 人物塑造立体，对话符合角色身份与性格。\n   - 氛围营造到位，情感表达细腻真实。\n3. **约束**：\n   - 保持原文核心内容与主旨不变。\n   - 避免过度修饰或偏离原意。\n   - 语言风格需与原文基调协调。\n4. **输出要求**：\n   - 输出润色后的完整文本。\n   - 确保无语法错误与逻辑漏洞。\n   - 若原文有明显问题，可适度调整并说明。",
+        "is_preset": false,
+        "parameters": {}
+      }
+    ],
+    "selected_styles": [
+      "9e0b83a6-02fa-4787-a56f-f650df2fc29c"
+    ]
+  },
+  "theme": "dark",
+  "version": "2.0.0"
+}

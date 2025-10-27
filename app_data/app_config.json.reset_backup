@@ -1,0 +1,30 @@
+{
+  "api_config": {
+    "api_key": "sk-lkyueaxfcbidfnqdjovopzseiexnloloieuwbrzfpniozmet",
+    "base_url": "https://api.siliconflow.cn/v1/chat/completions",
+    "model": "deepseek-ai/DeepSeek-V3.2-Exp",
+    "timeout": 45
+  },
+  "polish_styles": {
+    "preset_styles": [
+      "standard",
+      "literary",
+      "concise",
+      "emotional"
+    ],
+    "custom_styles": [
+      {
+        "id": "17703ef9-bd73-4a09-804e-57860792238a",
+        "name": "小说风格",
+        "prompt": "以专业小说作家的风格润色",
+        "is_preset": false,
+        "parameters": {}
+      }
+    ],
+    "selected_styles": [
+      "standard"
+    ]
+  },
+  "theme": "light",
+  "version": "2.0.0"
+}
