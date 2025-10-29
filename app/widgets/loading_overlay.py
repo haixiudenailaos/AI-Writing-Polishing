@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from typing import Dict
 
-from PyQt5 import QtCore, QtGui, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
+from app.widgets.design_system import Animation
 
 
 def _parse_color(value: str) -> QtGui.QColor:
@@ -34,15 +35,22 @@ class LoadingOverlay(QtWidgets.QWidget):
         self._spinner_timer = QtCore.QTimer(self)
         self._spinner_timer.timeout.connect(self._handle_tick)
         self._rotation_angle = 0
+        self._opacity = 0.0  # 用于淡入淡出效果
 
         self._overlay_color = QtGui.QColor(0, 0, 0, 180)
         self._accent_color = QtGui.QColor("#0e639c")
         self._track_color = QtGui.QColor(255, 255, 255, 30)
+        
+        # 淡入淡出动画
+        self._fade_animation = QtCore.QPropertyAnimation(self, b"windowOpacity")
+        self._fade_animation.setDuration(Animation.Duration.NORMAL)
+        self._fade_animation.setEasingCurve(QtCore.QEasingCurve.InOutQuad)
 
         self.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, True)
         self.setAttribute(QtCore.Qt.WA_NoSystemBackground, True)
         self.setAttribute(QtCore.Qt.WA_StyledBackground, True)
         self.setAttribute(QtCore.Qt.WA_TranslucentBackground, True)
+        self.setWindowOpacity(0.0)
         self.hide()
 
     def set_theme(self, theme: Dict[str, str]) -> None:
@@ -76,10 +84,26 @@ class LoadingOverlay(QtWidgets.QWidget):
         self.resize(self.parent().size())
         self.show()
         self.raise_()
+        
+        # 淡入动画
+        self._fade_animation.stop()
+        self._fade_animation.setStartValue(0.0)
+        self._fade_animation.setEndValue(1.0)
+        self._fade_animation.start()
 
     def stop(self) -> None:
+        # 淡出动画
+        self._fade_animation.stop()
+        self._fade_animation.setStartValue(self.windowOpacity())
+        self._fade_animation.setEndValue(0.0)
+        self._fade_animation.finished.connect(self._on_fade_out_finished)
+        self._fade_animation.start()
+
+    def _on_fade_out_finished(self) -> None:
+        """淡出动画完成后隐藏遮罩"""
         self._spinner_timer.stop()
         self.hide()
+        self._fade_animation.finished.disconnect(self._on_fade_out_finished)
 
     def _handle_tick(self) -> None:
         self._rotation_angle = (self._rotation_angle + 8) % 360

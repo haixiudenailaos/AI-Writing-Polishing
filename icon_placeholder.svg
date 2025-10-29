@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="256" height="256" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
+  <!-- 背景圆形 -->
+  <circle cx="128" cy="128" r="120" fill="#4A90E2" stroke="#2E5C8A" stroke-width="4"/>
+  
+  <!-- 书本图标 -->
+  <g transform="translate(64, 80)">
+    <!-- 书本主体 -->
+    <rect x="0" y="20" width="128" height="96" rx="8" fill="#FFFFFF" stroke="#E0E0E0" stroke-width="2"/>
+    
+    <!-- 书本页面 -->
+    <rect x="8" y="28" width="112" height="80" fill="#F8F9FA"/>
+    
+    <!-- 文字线条 -->
+    <line x1="20" y1="45" x2="108" y2="45" stroke="#666666" stroke-width="2"/>
+    <line x1="20" y1="60" x2="100" y2="60" stroke="#666666" stroke-width="2"/>
+    <line x1="20" y1="75" x2="95" y2="75" stroke="#666666" stroke-width="2"/>
+    <line x1="20" y1="90" x2="105" y2="90" stroke="#666666" stroke-width="2"/>
+    
+    <!-- AI 润色图标 -->
+    <circle cx="100" cy="35" r="12" fill="#FF6B6B"/>
+    <text x="100" y="40" text-anchor="middle" fill="white" font-family="Arial" font-size="10" font-weight="bold">AI</text>
+  </g>
+  
+  <!-- 应用名称 -->
+  <text x="128" y="200" text-anchor="middle" fill="#FFFFFF" font-family="Microsoft YaHei" font-size="18" font-weight="bold">字见润新</text>
+  <text x="128" y="220" text-anchor="middle" fill="#E0E0E0" font-family="Microsoft YaHei" font-size="12">AI Writing Tool</text>
+</svg>

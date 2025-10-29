@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from typing import Callable, Dict, Iterable
 
-from PyQt5 import QtCore, QtGui, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
-from widgets.theme_manager import THEME_CATALOG
+from app.widgets.theme_manager import THEME_CATALOG
+from app.widgets.design_system import Spacing, BorderRadius, Typography
 
 
 def _parse_color(value: str) -> QtGui.QColor:
@@ -66,8 +67,8 @@ class OutputItemWidget(QtWidgets.QWidget):
 
     def _build_ui(self) -> None:
         layout = QtWidgets.QHBoxLayout(self)
-        layout.setContentsMargins(12, 8, 16, 8)
-        layout.setSpacing(16)
+        layout.setContentsMargins(Spacing.MD, Spacing.SM, Spacing.LG, Spacing.SM)
+        layout.setSpacing(Spacing.LG)
 
         self._line_indicator = QtWidgets.QFrame(self)
         self._line_indicator.setFixedWidth(4)
@@ -94,25 +95,26 @@ class OutputItemWidget(QtWidgets.QWidget):
         button_container = QtWidgets.QWidget(self)
         button_layout = QtWidgets.QVBoxLayout(button_container)
         button_layout.setContentsMargins(0, 0, 0, 0)
-        button_layout.setSpacing(6)
+        button_layout.setSpacing(Spacing.SM)
 
-        self._accept_button = QtWidgets.QPushButton("接受", button_container)
+        self._accept_button = QtWidgets.QPushButton("✓ 接受", button_container)
         self._accept_button.setObjectName("acceptButton")
         self._accept_button.setCursor(QtGui.QCursor(QtCore.Qt.PointingHandCursor))
         self._accept_button.clicked.connect(self._handle_accept)
 
-        self._reject_button = QtWidgets.QPushButton("拒绝", button_container)
+        self._reject_button = QtWidgets.QPushButton("✕ 拒绝", button_container)
         self._reject_button.setObjectName("rejectButton")
         self._reject_button.setCursor(QtGui.QCursor(QtCore.Qt.PointingHandCursor))
         self._reject_button.clicked.connect(self._handle_reject)
 
-        self._reuse_button = QtWidgets.QPushButton("再次润色", button_container)
+        self._reuse_button = QtWidgets.QPushButton("↻ 再次润色", button_container)
         self._reuse_button.setObjectName("reuseButton")
         self._reuse_button.setCursor(QtGui.QCursor(QtCore.Qt.PointingHandCursor))
         self._reuse_button.clicked.connect(self._handle_reuse)
 
         for button in (self._accept_button, self._reject_button, self._reuse_button):
-            button.setFixedWidth(92)
+            button.setFixedWidth(108)
+            button.setMinimumHeight(Spacing.XXL + 4)
 
         button_layout.addWidget(self._accept_button)
         button_layout.addWidget(self._reject_button)
@@ -162,10 +164,12 @@ class OutputItemWidget(QtWidgets.QWidget):
                         f"  background-color: {background_color.name()};",
                         f"  color: {foreground_color.name()};",
                         f"  border: 1px solid {border_color.name()};",
-                        "  border-radius: 6px;",
-                        "  padding: 8px 10px;",
+                        f"  border-radius: {BorderRadius.LG}px;",
+                        f"  padding: {Spacing.SM + 2}px {Spacing.MD}px;",
                         "  selection-background-color: rgba(14, 99, 156, 0.45);",
                         "  selection-color: #ffffff;",
+                        f"  font-size: {Typography.FontSize.BASE}px;",
+                        "  line-height: 1.6;",
                         "}",
                         "QTextBrowser QScrollBar:vertical {",
                         "  width: 6px;",
@@ -186,26 +190,37 @@ class OutputItemWidget(QtWidgets.QWidget):
                 )
             )
 
-        button_style = "\n".join(
+        # 使用设计系统的样式
+        button_base_style = "\n".join(
             [
                 "QPushButton {",
-                f"  background-color: {button_background.name()};",
+                f"  background: qlineargradient(x1:0, y1:0, x2:0, y2:1,",
+                f"    stop:0 {button_background.name()},",
+                f"    stop:1 {button_background.darker(105).name()});",
                 f"  color: {button_foreground.name()};",
                 f"  border: 1px solid {border_color.name()};",
-                "  border-radius: 3px;",
-                "  padding: 4px 0;",
-                "  font-size: 12px;",
+                f"  border-radius: {BorderRadius.MD}px;",
+                f"  padding: {Spacing.SM}px {Spacing.MD}px;",
+                f"  font-size: {Typography.FontSize.SM}px;",
+                f"  font-weight: {Typography.FontWeight.MEDIUM};",
                 "  font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;",
                 "}",
                 "QPushButton:hover {",
-                f"  background-color: {accent_color.name()};",
+                f"  background: qlineargradient(x1:0, y1:0, x2:0, y2:1,",
+                f"    stop:0 {accent_color.lighter(110).name()},",
+                f"    stop:1 {accent_color.name()});",
                 "  color: #ffffff;",
+                f"  border-color: {accent_color.name()};",
                 "}",
                 "QPushButton:pressed {",
-                f"  background-color: {accent_color.darker(120).name()};",
+                f"  background: {accent_color.darker(115).name()};",
+                "  color: #ffffff;",
+                f"  border-color: {accent_color.darker(115).name()};",
                 "}",
             ]
         )
+        
+        button_style = button_base_style
 
         if self._accept_button is not None:
             self._accept_button.setStyleSheet(button_style)

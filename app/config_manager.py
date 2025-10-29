@@ -11,7 +11,7 @@ from dataclasses import dataclass, asdict, field
 from typing import Any, Dict, List, Optional
 from pathlib import Path
 
-from settings_storage import SettingsStorage
+from app.settings_storage import SettingsStorage
 
 
 @dataclass
@@ -21,6 +21,10 @@ class APIConfig:
     base_url: str = "https://api.siliconflow.cn/v1/chat/completions"
     model: str = "deepseek-ai/DeepSeek-V3.2-Exp"
     timeout: int = 45
+    
+    # 向量化API配置
+    embedding_api_key: str = ""  # 阿里云API密钥
+    embedding_model: str = "text-embedding-v4"  # 向量模型
 
 
 @dataclass
@@ -34,6 +38,21 @@ class PolishStyle:
 
 
 @dataclass
+class ExportConfig:
+    """导出配置数据结构"""
+    export_directory: str = ""  # 导出目录路径
+    auto_export_enabled: bool = False  # 是否启用实时导出
+    export_filename: str = "字见润新.txt"  # 导出文件名
+
+
+@dataclass
+class WorkspaceConfig:
+    """工作区配置数据结构"""
+    last_opened_folder: str = ""  # 上次打开的文件夹路径
+    prediction_enabled: bool = False  # 剧情预测功能是否启用（默认关闭）
+
+
+@dataclass
 class AppConfig:
     """应用配置数据结构"""
     api_config: APIConfig = field(default_factory=APIConfig)
@@ -41,6 +60,8 @@ class AppConfig:
     selected_styles: List[str] = field(default_factory=lambda: ["standard"])
     theme: str = "dark"
     version: str = "2.0.0"
+    export_config: ExportConfig = field(default_factory=ExportConfig)  # 导出配置
+    workspace_config: WorkspaceConfig = field(default_factory=WorkspaceConfig)  # 工作区配置
 
 
 class ConfigManager:
@@ -274,7 +295,9 @@ class ConfigManager:
             polish_styles=preset_styles,
             selected_styles=["professional_screenwriter"],
             theme="dark",
-            version="2.1.0"
+            version="2.1.0",
+            export_config=ExportConfig(),
+            workspace_config=WorkspaceConfig()
         )
     
     def _parse_config_data(self, data: Dict[str, Any]) -> AppConfig:
@@ -287,6 +310,10 @@ class ConfigManager:
         base_url_value = api_data.get("base_url", "https://api.siliconflow.cn/v1/chat/completions")
         model_value = api_data.get("model", "deepseek-ai/DeepSeek-V3.2-Exp")
         timeout_value = api_data.get("timeout", 45)
+        
+        # 向量化API配置
+        embedding_api_key_value = api_data.get("embedding_api_key", "")
+        embedding_model_value = api_data.get("embedding_model", "text-embedding-v4")
 
         # 类型规范化
         try:
@@ -299,6 +326,8 @@ class ConfigManager:
             base_url=str(base_url_value or "https://api.siliconflow.cn/v1/chat/completions"),
             model=str(model_value or "deepseek-ai/DeepSeek-V3.2-Exp"),
             timeout=timeout_value,
+            embedding_api_key=str(embedding_api_key_value or ""),
+            embedding_model=str(embedding_model_value or "text-embedding-v4")
         )
         
         # 解析润色风格
@@ -326,12 +355,28 @@ class ConfigManager:
         # 选中的风格
         selected_styles = styles_data.get("selected_styles", ["professional_screenwriter"])
         
+        # 解析导出配置
+        export_data = data.get("export_config", {})
+        export_config = ExportConfig(
+            export_directory=export_data.get("export_directory", ""),
+            auto_export_enabled=export_data.get("auto_export_enabled", False),
+            export_filename=export_data.get("export_filename", "字见润新.txt")
+        )
+        
+        # 解析工作区配置
+        workspace_data = data.get("workspace_config", {})
+        workspace_config = WorkspaceConfig(
+            last_opened_folder=workspace_data.get("last_opened_folder", "")
+        )
+        
         return AppConfig(
             api_config=api_config,
             polish_styles=polish_styles,
             selected_styles=selected_styles,
             theme=data.get("theme", "dark"),
-            version=data.get("version", "2.0.0")
+            version=data.get("version", "2.0.0"),
+            export_config=export_config,
+            workspace_config=workspace_config
         )
     
     def _needs_migration(self) -> bool:
@@ -418,15 +463,25 @@ class ConfigManager:
             "selected_styles": config.selected_styles
         }
         
+        # 导出配置
+        export_config_dict = asdict(config.export_config)
+        
+        # 工作区配置
+        workspace_config_dict = asdict(config.workspace_config)
+        
         return {
             "api_config": api_config_dict,
             "polish_styles": polish_styles_dict,
             "theme": config.theme,
-            "version": config.version
+            "version": config.version,
+            "export_config": export_config_dict,
+            "workspace_config": workspace_config_dict
         }
     
     def update_api_config(self, api_key: str, base_url: Optional[str] = None, 
-                         model: Optional[str] = None, timeout: Optional[int] = None) -> None:
+                         model: Optional[str] = None, timeout: Optional[int] = None,
+                         embedding_api_key: Optional[str] = None,
+                         embedding_model: Optional[str] = None) -> None:
         """更新API配置"""
         config = self.get_config()
         config.api_config.api_key = api_key
@@ -436,6 +491,10 @@ class ConfigManager:
             config.api_config.model = model
         if timeout is not None:
             config.api_config.timeout = timeout
+        if embedding_api_key is not None:
+            config.api_config.embedding_api_key = embedding_api_key
+        if embedding_model is not None:
+            config.api_config.embedding_model = embedding_model
         
         self.save_config()
     
@@ -628,3 +687,53 @@ class ConfigManager:
             return True
         except Exception:
             return False
+    
+    def get_export_config(self) -> ExportConfig:
+        """获取导出配置"""
+        config = self.get_config()
+        return config.export_config
+    
+    def update_export_config(self, export_directory: Optional[str] = None,
+                            auto_export_enabled: Optional[bool] = None,
+                            export_filename: Optional[str] = None) -> None:
+        """更新导出配置
+        
+        Args:
+            export_directory: 导出目录路径
+            auto_export_enabled: 是否启用实时导出
+            export_filename: 导出文件名
+        """
+        config = self.get_config()
+        if export_directory is not None:
+            config.export_config.export_directory = export_directory
+        if auto_export_enabled is not None:
+            config.export_config.auto_export_enabled = auto_export_enabled
+        if export_filename is not None:
+            config.export_config.export_filename = export_filename
+        
+        self.save_config()
+    
+    def get_workspace_config(self) -> WorkspaceConfig:
+        """获取工作区配置"""
+        config = self.get_config()
+        return config.workspace_config
+    
+    def update_last_opened_folder(self, folder_path: str) -> None:
+        """更新上次打开的文件夹路径
+        
+        Args:
+            folder_path: 文件夹路径
+        """
+        config = self.get_config()
+        config.workspace_config.last_opened_folder = folder_path
+        self.save_config()
+    
+    def update_workspace_config(self, workspace_config: WorkspaceConfig) -> None:
+        """更新工作区配置
+        
+        Args:
+            workspace_config: 工作区配置对象
+        """
+        config = self.get_config()
+        config.workspace_config = workspace_config
+        self.save_config()

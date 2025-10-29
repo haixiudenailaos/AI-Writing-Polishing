@@ -78,15 +78,15 @@
 
             <div class="form-group">
               <label>模型</label>
-              <input 
+              <select 
                 v-model="formData.model"
-                type="text"
-                placeholder="deepseek-ai/DeepSeek-V3.2-Exp"
-                class="form-input"
-                disabled
-                title="当前仅支持 DeepSeek-V3.2-Exp 模型"
-              />
-              <p class="model-note">当前仅支持 <strong>DeepSeek-V3.2-Exp</strong> 模型</p>
+                class="form-select"
+                title="选择AI模型"
+              >
+                <option value="deepseek-ai/DeepSeek-V3.2-Exp">DeepSeek-V3.2-Exp</option>
+                <option value="deepseek-ai/DeepSeek-V3">DeepSeek-V3</option>
+              </select>
+              <p class="model-note">💡 当前仅支持 <strong>DeepSeek-V3.2-Exp</strong> 和 <strong>DeepSeek-V3</strong> 模型</p>
             </div>
 
             <div class="form-group">
@@ -294,7 +294,7 @@ function loadSettings() {
   formData.value = {
     apiKey: settings.apiKey || '',
     baseUrl: settings.baseUrl || 'https://api.siliconflow.cn/v1/chat/completions',
-    model: 'deepseek-ai/DeepSeek-V3.2-Exp', // 固定为 DeepSeek-V3.2-Exp，不可修改
+    model: settings.model || 'deepseek-ai/DeepSeek-V3.2-Exp', // 默认为 DeepSeek-V3.2-Exp
     selectedStyles: settings.selectedStyles || []
   }
   customStyles.value = settings.customStyles || []
@@ -317,7 +317,7 @@ async function testConnection() {
       body: JSON.stringify({
         api_key: formData.value.apiKey,
         base_url: formData.value.baseUrl,
-        model: 'deepseek-ai/DeepSeek-V3.2-Exp' // 强制使用固定模型
+        model: formData.value.model // 使用选择的模型
       })
     })
 
@@ -415,7 +415,7 @@ function resetSettings() {
     formData.value = {
       apiKey: '',
       baseUrl: 'https://api.siliconflow.cn/v1/chat/completions',
-      model: 'deepseek-ai/DeepSeek-V3.2-Exp', // 重置时保持固定模型
+      model: 'deepseek-ai/DeepSeek-V3.2-Exp', // 重置时使用默认模型
       selectedStyles: []
     }
     customStyles.value = []
@@ -567,7 +567,8 @@ function close() {
   font-weight: 500;
 }
 
-.form-input {
+.form-input,
+.form-select {
   width: 100%;
   padding: 8px 10px;
   background-color: var(--input-background);
@@ -578,9 +579,36 @@ function close() {
   font-family: inherit;
 }
 
-.form-input:focus {
+.form-input:focus,
+.form-select:focus {
   outline: none;
   border-color: var(--focus-border);
+  box-shadow: 0 0 0 2px rgba(75, 166, 223, 0.2);
+}
+
+.form-select {
+  cursor: pointer;
+  padding-right: 32px;
+  background-image: linear-gradient(45deg, transparent 50%, var(--input-foreground) 50%),
+                    linear-gradient(135deg, var(--input-foreground) 50%, transparent 50%);
+  background-position: calc(100% - 14px) calc(50% - 2px),
+                       calc(100% - 9px) calc(50% - 2px);
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+}
+
+.form-select:hover {
+  border-color: var(--focus-border);
+  background-color: var(--button-hover-background);
+}
+
+.form-select option {
+  background-color: var(--input-background);
+  color: var(--input-foreground);
+  padding: 8px 12px;
 }
 
 .input-with-button {
@@ -749,12 +777,6 @@ function close() {
 
 .model-note strong {
   color: #4ba6df;
-}
-
-.form-input:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-  background-color: var(--panel-background);
 }
 
 .reset-btn {

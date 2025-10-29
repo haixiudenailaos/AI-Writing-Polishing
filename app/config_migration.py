@@ -9,8 +9,8 @@ from typing import Dict, Any, Optional, List
 from dataclasses import asdict
 from pathlib import Path
 
-from config_manager import ConfigManager, APIConfig, PolishStyle
-from settings_storage import SettingsStorage
+from app.config_manager import ConfigManager, APIConfig, PolishStyle
+from app.settings_storage import SettingsStorage
 
 
 class ConfigMigration:

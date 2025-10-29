@@ -4,19 +4,41 @@ import itertools
 import sys
 from pathlib import Path
 from typing import Dict, Optional
+from functools import partial
 
-from PyQt5 import QtCore, QtGui, QtWidgets
-from PyQt5.QtWidgets import QFileDialog
+from PySide6 import QtCore, QtGui, QtWidgets
+from PySide6.QtWidgets import QFileDialog
 from dotenv import load_dotenv
 
-from api_client import AIClient, AIError
-from widgets.loading_overlay import LoadingOverlay
-from widgets.output_list import OutputListWidget
-from widgets.theme_manager import ThemeManager
-from widgets.settings_dialog import SettingsDialog
-from config_manager import ConfigManager
-from style_manager import StyleManager
-from text_processor import TextProcessor
+import sys
+import os
+
+# 添加项目根目录到 Python 路径
+if __name__ == '__main__':
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+
+from app.api_client import AIClient, AIError
+from app.widgets.loading_overlay import LoadingOverlay
+from app.widgets.design_system import Elevation
+from app.widgets.output_list import OutputListWidget
+from app.widgets.theme_manager import ThemeManager
+from app.widgets.settings_dialog import SettingsDialog
+from app.widgets.file_explorer import FileExplorerWidget
+from app.widgets.knowledge_base_dialog import KnowledgeBaseProgressDialog
+from app.widgets.polish_result_panel import PolishResultPanel
+from app.widgets.prediction_toggle import PredictionToggle
+from app.config_manager import ConfigManager
+from app.style_manager import StyleManager
+from app.text_processor import TextProcessor
+from app.knowledge_base import KnowledgeBaseManager
+from app.auto_export_manager import AutoExportManager
+from app.document_handler import DocumentHandler
+from app.auto_save_manager import AutoSaveManager
+from app.widgets.batch_polish_dialog import BatchPolishDialog
+from app.processors.async_polish_processor import AsyncPolishProcessor, HeartbeatManager
+from app.request_queue_manager import RequestQueueManager, RequestType, RequestPriority
 
 OUTPUT_ITEM_ROLE = QtCore.Qt.UserRole + 1
 
@@ -35,11 +57,11 @@ class LineNumberArea(QtWidgets.QWidget):
 
 
 class VsCodeEditor(QtWidgets.QPlainTextEdit):
-    enterPressed = QtCore.pyqtSignal()
-    tabPressed = QtCore.pyqtSignal()
-    quickRejectPressed = QtCore.pyqtSignal()
-    textPolishRequested = QtCore.pyqtSignal(str)  # 新增：请求润色信号
-    inputStoppedForPrediction = QtCore.pyqtSignal()  # 新增：输入停止3秒信号，用于触发剧情预测
+    enterPressed = QtCore.Signal()
+    tabPressed = QtCore.Signal()
+    quickRejectPressed = QtCore.Signal()
+    textPolishRequested = QtCore.Signal(str)  # 新增：请求润色信号
+    inputStoppedForPrediction = QtCore.Signal()  # 新增：输入停止3秒信号，用于触发剧情预测
 
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
@@ -47,7 +69,7 @@ class VsCodeEditor(QtWidgets.QPlainTextEdit):
         self._line_number_area = LineNumberArea(self)
         
         # 导入UI增强模块
-        from widgets.ui_enhancer import UnderlineRenderer
+        from app.widgets.ui_enhancer import UnderlineRenderer
         self._underline_renderer = UnderlineRenderer(self)
 
         self.setObjectName("VsCodeEditor")
@@ -170,7 +192,7 @@ class VsCodeEditor(QtWidgets.QPlainTextEdit):
             self.tabPressed.emit()
             event.accept()
             return
-        if event.key() in (QtCore.Qt.Key_QuoteLeft, QtCore.Qt.Key_AsciiTilde) and event.modifiers() == QtCore.Qt.NoModifier:
+        if event.key() in (QtCore.Qt.Key_QuoteLeft, QtCore.Qt.Key_AsciiTilde) and event.modifiers() in (QtCore.Qt.NoModifier, QtCore.Qt.ShiftModifier):
             self.quickRejectPressed.emit()
             event.accept()
             return
@@ -243,8 +265,13 @@ class VsCodeEditor(QtWidgets.QPlainTextEdit):
 
 
 class WorkerSignals(QtCore.QObject):
-    finished = QtCore.pyqtSignal(str)
-    error = QtCore.pyqtSignal(str)
+    """Worker 信号类 - 用于线程间通信"""
+    finished = QtCore.Signal(str)
+    error = QtCore.Signal(str)
+    
+    def __init__(self):
+        super().__init__()
+        print(f"[DEBUG] WorkerSignals 初始化完成", flush=True)
 
 
 class PolishWorker(QtCore.QRunnable):
@@ -255,29 +282,105 @@ class PolishWorker(QtCore.QRunnable):
         self._target_line = target_line
         self._style_prompt = style_prompt
         self.signals = WorkerSignals()
+        print(f"[DEBUG] PolishWorker.__init__() 完成，target_line={target_line[:20]}", flush=True)
 
     def run(self) -> None:
+        import sys
+        import traceback
+        
+        print(f"[DEBUG] PolishWorker.run() 开始执行", flush=True)
+        sys.stdout.flush()
+        
+        polished_text = None  # 初始化变量
+        
         try:
+            print(f"[DEBUG] 调用 API polish_last_line，参数: context行数={len(self._context_lines)}, target={self._target_line[:30]}...", flush=True)
+            sys.stdout.flush()
+            
+            print(f"[DEBUG] 准备接收 API 返回值...", flush=True)
+            sys.stdout.flush()
+            
             polished_text = self._client.polish_last_line(self._context_lines, self._target_line, self._style_prompt)
+            
+            print(f"[DEBUG] ===== API 返回值已接收 =====", flush=True)
+            print(f"[DEBUG] polish_last_line 返回成功，type={type(polished_text)}, len={len(polished_text) if polished_text else 0}", flush=True)
+            print(f"[DEBUG] polished_text repr: {repr(polished_text[:100])}", flush=True)
+            sys.stdout.flush()
+            
+            if polished_text:
+                print(f"[DEBUG] API 返回结果: {polished_text[:50] if len(polished_text) > 50 else polished_text}...", flush=True)
+            else:
+                print(f"[DEBUG] API 返回结果为空！", flush=True)
+            sys.stdout.flush()
+            
         except AIError as exception:
-            self.signals.error.emit(str(exception))
+            print(f"[DEBUG] 捕获 AIError: {exception}", flush=True)
+            sys.stdout.flush()
+            try:
+                self.signals.error.emit(str(exception))
+            except Exception as e2:
+                print(f"[ERROR] 发送error信号失败: {e2}", flush=True)
+                traceback.print_exc()
+                sys.stdout.flush()
+            return  # 发生错误后直接返回
         except Exception as exception:  # noqa: BLE001
-            self.signals.error.emit(f"未知错误：{exception}")
+            print(f"[DEBUG] 捕获 Exception: {type(exception).__name__}: {exception}", flush=True)
+            traceback.print_exc()
+            sys.stdout.flush()
+            try:
+                self.signals.error.emit(f"未知错误：{exception}")
+            except Exception as e2:
+                print(f"[ERROR] 发送error信号失败: {e2}", flush=True)
+                traceback.print_exc()
+                sys.stdout.flush()
+            return  # 发生错误后直接返回
+        
+        print(f"[DEBUG] try块执行完毕，polished_text={'有值' if polished_text else '为空'}", flush=True)
+        sys.stdout.flush()
+        
+        # 只有成功获取到润色文本时才发送 finished 信号
+        if polished_text:
+            print(f"[DEBUG] 准备发送 finished 信号，polished_text={polished_text[:30] if len(polished_text) > 30 else polished_text}", flush=True)
+            sys.stdout.flush()
+            
+            try:
+                print(f"[DEBUG] 调用 signals.finished.emit()...", flush=True)
+                sys.stdout.flush()
+                
+                self.signals.finished.emit(polished_text)
+                
+                print(f"[DEBUG] finished 信号已发送", flush=True)
+                sys.stdout.flush()
+            except Exception as e:
+                print(f"[ERROR] 发送 finished 信号时出错: {type(e).__name__}: {e}", flush=True)
+                traceback.print_exc()
+                sys.stdout.flush()
         else:
-            self.signals.finished.emit(polished_text)
+            print(f"[ERROR] polished_text 为空，不发送信号", flush=True)
+            sys.stdout.flush()
+            try:
+                self.signals.error.emit("润色结果为空")
+            except Exception as e:
+                print(f"[ERROR] 发送error信号失败: {e}", flush=True)
+                traceback.print_exc()
+                sys.stdout.flush()
+        
+        print(f"[DEBUG] PolishWorker.run() 执行完毕", flush=True)
+        sys.stdout.flush()
 
 
 class PlotPredictionWorker(QtCore.QRunnable):
     """剧情预测工作线程"""
-    def __init__(self, client: AIClient, full_text: str) -> None:
+    def __init__(self, client: AIClient, full_text: str, style_prompt: Optional[str] = None) -> None:
         super().__init__()
         self._client = client
         self._full_text = full_text
+        self._style_prompt = style_prompt
         self.signals = WorkerSignals()
     
     def run(self) -> None:
         try:
-            predicted_text = self._client.predict_plot_continuation(self._full_text)
+            predicted_text = self._client.predict_plot_continuation(self._full_text, self._style_prompt or "")
         except AIError as exception:
             self.signals.error.emit(str(exception))
         except Exception as exception:  # noqa: BLE001
@@ -286,10 +389,39 @@ class PlotPredictionWorker(QtCore.QRunnable):
             self.signals.finished.emit(predicted_text)
 
 
+class BatchPolishWorker(QtCore.QThread):
+    """批量润色工作线程"""
+    
+    finished = QtCore.Signal(str)  # 润色完成，发送润色后的内容
+    error = QtCore.Signal(str)  # 发生错误
+    
+    def __init__(self, client: AIClient, content: str, requirement: str):
+        super().__init__()
+        self.client = client
+        self.content = content
+        self.requirement = requirement
+    
+    def run(self):
+        """执行批量润色"""
+        try:
+            print(f"[DEBUG] BatchPolishWorker 开始执行", flush=True)
+            polished = self.client.batch_polish_document(self.content, self.requirement)
+            print(f"[DEBUG] BatchPolishWorker 完成，返回长度: {len(polished)}", flush=True)
+            self.finished.emit(polished)
+        except AIError as e:
+            print(f"[ERROR] BatchPolishWorker AI错误: {e}", flush=True)
+            self.error.emit(f"AI服务错误：{str(e)}")
+        except Exception as e:
+            print(f"[ERROR] BatchPolishWorker 异常: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+            self.error.emit(f"未知错误：{str(e)}")
+
+
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("VSCode风格小说润色器")
+        self.setWindowTitle("字见润新")
         self.resize(1100, 720)
 
         # 初始化配置管理器
@@ -304,9 +436,28 @@ class MainWindow(QtWidgets.QMainWindow):
         self._api_client = AIClient(config_manager=self._config_manager)
         
         # 初始化异步润色处理器和心跳管理器
-        from processors.async_polish_processor import AsyncPolishProcessor, HeartbeatManager
+        # 注意：已在文件顶部导入，不需要在此处再次导入
         self._async_polish_processor = AsyncPolishProcessor(self._api_client, self)
         self._heartbeat_manager = HeartbeatManager(self._api_client, 30, self)
+        
+        # 初始化请求队列管理器（避免润色和预测冲突）
+        # 注意：已在文件顶部导入，不需要在此处再次导入
+        self._request_queue_manager = RequestQueueManager(max_concurrent=1, parent=self)
+        
+        # 连接队列管理器的信号（用于监控队列状态）
+        self._request_queue_manager.request_started.connect(self._on_request_started)
+        self._request_queue_manager.request_completed.connect(self._on_request_completed)
+        self._request_queue_manager.request_failed.connect(self._on_request_failed)
+        
+        # 初始化知识库管理器
+        self._kb_manager = KnowledgeBaseManager()
+        
+        # 初始化实时导出管理器
+        self._auto_export_manager = AutoExportManager(debounce_ms=2000, parent=self)
+        
+        # 初始化自动保存管理器（每30秒保存一次）
+        self._auto_save_manager = AutoSaveManager(interval_seconds=30, parent=self)
+        self._current_file_path: Optional[str] = None  # 当前打开的文件路径
         
         self._thread_pool = QtCore.QThreadPool.globalInstance()
         self._polish_in_progress = False
@@ -326,12 +477,22 @@ class MainWindow(QtWidgets.QMainWindow):
         self.output_list = OutputListWidget(self)
         self.output_list.setFocusPolicy(QtCore.Qt.StrongFocus)
         
+        # 初始化文件资源管理器
+        self.file_explorer = FileExplorerWidget(self)
+        self.file_explorer.setMinimumWidth(200)
+        self.file_explorer.setMaximumWidth(400)
+        
         # 初始化润色结果面板
-        from widgets.polish_result_panel import PolishResultPanel
+        # 注意：已在文件顶部导入，不需要在此处再次导入
         self.polish_result_panel = PolishResultPanel(self)
+        # 润色结果面板投影，突出层级
+        try:
+            Elevation.apply_shadow(self.polish_result_panel, blur_radius=20, offset_x=0, offset_y=2, color=QtGui.QColor(0, 0, 0, 72))
+        except Exception:
+            pass
         
         # 初始化动画管理器
-        from widgets.ui_enhancer import AnimationManager
+        from app.widgets.ui_enhancer import AnimationManager
         self.animation_manager = AnimationManager(self)
 
         self._build_ui()
@@ -339,6 +500,15 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self._theme_manager.themeChanged.connect(self._apply_theme)
         self._theme_manager.emitCurrentTheme()
+        
+        # 自动加载上次打开的文件夹
+        self._load_last_opened_folder()
+        
+        # 加载剧情预测开关状态
+        self._load_prediction_config()
+        
+        # 【性能优化】程序启动后立即预热API连接，确保最快响应
+        self._warmup_api_connection()
     
     def on_editor_line_count_changed(self, changed_line: int, delta: int) -> None:
         """处理编辑器行数变化 - 调整润色结果面板中的行号
@@ -349,6 +519,97 @@ class MainWindow(QtWidgets.QMainWindow):
         """
         if hasattr(self, 'polish_result_panel'):
             self.polish_result_panel.adjust_line_numbers(changed_line, delta)
+    
+    def _load_last_opened_folder(self) -> None:
+        """加载上次打开的文件夹"""
+        workspace_config = self._config_manager.get_workspace_config()
+        last_folder = workspace_config.last_opened_folder
+        
+        # 检查文件夹是否存在
+        if last_folder and os.path.isdir(last_folder):
+            try:
+                self.file_explorer.load_folder(last_folder)
+                print(f"[INFO] 已自动加载上次打开的文件夹: {last_folder}")
+            except Exception as e:
+                print(f"[WARN] 加载上次打开的文件夹失败: {e}")
+    
+    def _load_prediction_config(self) -> None:
+        """加载剧情预测开关状态"""
+        workspace_config = self._config_manager.get_workspace_config()
+        prediction_enabled = workspace_config.prediction_enabled
+        self.prediction_toggle.set_enabled(prediction_enabled)
+        print(f"[INFO] 剧情预测功能: {'已启用' if prediction_enabled else '已关闭'}")
+    
+    def _on_prediction_toggle_changed(self, enabled: bool) -> None:
+        """处理剧情预测开关状态变化"""
+        # 保存到配置
+        workspace_config = self._config_manager.get_workspace_config()
+        workspace_config.prediction_enabled = enabled
+        self._config_manager.update_workspace_config(workspace_config)
+        
+        # 更新状态
+        status = "已启用" if enabled else "已关闭"
+        self._show_message(f"剧情预测功能{status}", duration_ms=2000, is_error=False)
+        print(f"[INFO] 剧情预测功能{status}")
+    
+    def _warmup_api_connection(self) -> None:
+        """预热API连接 - 在后台线程中执行，不阻塞UI启动"""
+        import sys
+        print(f"[INFO] 启动API预热任务...", file=sys.stderr, flush=True)
+        
+        # 使用QTimer延迟100ms执行，确保主窗口已完全显示
+        QtCore.QTimer.singleShot(100, self._execute_warmup)
+    
+    def _execute_warmup(self) -> None:
+        """执行API预热 - 在后台线程中运行"""
+        import sys
+        from PySide6.QtCore import QThread
+        
+        class WarmupWorker(QThread):
+            """预热工作线程"""
+            warmup_completed = QtCore.Signal(dict)  # 预热完成信号
+            
+            def __init__(self, api_client, parent=None):
+                super().__init__(parent)
+                self.api_client = api_client
+            
+            def run(self):
+                """执行预热任务"""
+                try:
+                    print(f"[INFO] 预热工作线程开始执行...", file=sys.stderr, flush=True)
+                    result = self.api_client.warmup_connection()
+                    self.warmup_completed.emit(result)
+                except Exception as e:
+                    print(f"[ERROR] 预热失败: {e}", file=sys.stderr, flush=True)
+                    import traceback
+                    traceback.print_exc()
+                    self.warmup_completed.emit({
+                        "success": False,
+                        "message": f"预热异常: {str(e)}",
+                        "warmup_time": 0.0
+                    })
+        
+        # 创建并启动预热工作线程
+        self._warmup_worker = WarmupWorker(self._api_client, self)
+        self._warmup_worker.warmup_completed.connect(self._on_warmup_completed)
+        self._warmup_worker.start()
+        
+        # 触发心跳管理器的首次检查（轻量级，不发送请求）
+        if hasattr(self, '_heartbeat_manager') and self._heartbeat_manager:
+            # 延迟500ms后执行首次心跳
+            QtCore.QTimer.singleShot(500, self._heartbeat_manager.force_reconnect)
+            print(f"[INFO] 心跳管理器已启动", file=sys.stderr, flush=True)
+    
+    def _on_warmup_completed(self, result: dict) -> None:
+        """预热完成回调"""
+        import sys
+        if result.get("success"):
+            warmup_time = result.get("warmup_time", 0.0)
+            print(f"[INFO] API连接池已就绪（{warmup_time*1000:.1f}ms）", file=sys.stderr, flush=True)
+            # 不显示消息，避免干扰用户
+        else:
+            error_msg = result.get("message", "未知错误")
+            print(f"[WARNING] 预热失败: {error_msg}", file=sys.stderr, flush=True)
 
     def _build_ui(self) -> None:
         central_container = QtWidgets.QFrame()
@@ -364,9 +625,33 @@ class MainWindow(QtWidgets.QMainWindow):
         header_layout.setSpacing(12)
         header_frame.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
         header_frame.setFixedHeight(44)
-        title_label = QtWidgets.QLabel("小说润色")
+        # 细腻的顶部阴影，提升层次感
+        try:
+            Elevation.apply_shadow(header_frame, blur_radius=18, offset_x=0, offset_y=2, color=QtGui.QColor(0, 0, 0, 64))
+        except Exception:
+            pass
+        title_label = QtWidgets.QLabel("字见润新")
         title_label.setObjectName("TitleLabel")
         title_label.setAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignLeft)
+        
+        # 导入文件夹按钮
+        import_folder_button = QtWidgets.QPushButton("导入文件夹")
+        import_folder_button.setObjectName("ImportFolderButton")
+        import_folder_button.setCursor(QtGui.QCursor(QtCore.Qt.PointingHandCursor))
+        import_folder_button.clicked.connect(self._on_import_folder)
+        
+        # 新建知识库按钮
+        create_kb_button = QtWidgets.QPushButton("新建知识库")
+        create_kb_button.setObjectName("CreateKBButton")
+        create_kb_button.setCursor(QtGui.QCursor(QtCore.Qt.PointingHandCursor))
+        create_kb_button.clicked.connect(self._on_create_knowledge_base)
+        
+        # 一键润色按钮
+        batch_polish_button = QtWidgets.QPushButton("✨ 一键润色")
+        batch_polish_button.setObjectName("BatchPolishButton")
+        batch_polish_button.setCursor(QtGui.QCursor(QtCore.Qt.PointingHandCursor))
+        batch_polish_button.clicked.connect(self._on_batch_polish_clicked)
+        batch_polish_button.setToolTip("对当前文档进行批量润色")
 
         theme_selector = QtWidgets.QComboBox()
         theme_selector.setObjectName("ThemeSelector")
@@ -380,7 +665,16 @@ class MainWindow(QtWidgets.QMainWindow):
         settings_button.setObjectName("SettingsButton")
         settings_button.setCursor(QtGui.QCursor(QtCore.Qt.PointingHandCursor))
 
-        export_button = QtWidgets.QPushButton("导出文本")
+        # 选择导出目录按钮
+        select_export_dir_button = QtWidgets.QPushButton("选择导出目录")
+        select_export_dir_button.setObjectName("SelectExportDirButton")
+        select_export_dir_button.setCursor(QtGui.QCursor(QtCore.Qt.PointingHandCursor))
+        
+        # 实时导出状态标签
+        auto_export_status_label = QtWidgets.QLabel("实时导出: 未启用")
+        auto_export_status_label.setObjectName("AutoExportStatusLabel")
+        
+        export_button = QtWidgets.QPushButton("手动导出")
         export_button.setObjectName("ExportButton")
         export_button.setCursor(QtGui.QCursor(QtCore.Qt.PointingHandCursor))
 
@@ -394,22 +688,41 @@ class MainWindow(QtWidgets.QMainWindow):
 
         header_layout.addWidget(title_label)
         header_layout.addSpacing(12)
+        header_layout.addWidget(import_folder_button, 0)
+        header_layout.addWidget(create_kb_button, 0)
+        header_layout.addWidget(batch_polish_button, 0)
         header_layout.addWidget(theme_selector, 0)
         header_layout.addWidget(settings_button, 0)
+        header_layout.addWidget(select_export_dir_button, 0)
         header_layout.addWidget(export_button, 0)
         header_layout.addWidget(quick_reject_button, 0)
+        header_layout.addWidget(auto_export_status_label, 0)
         header_layout.addStretch(1)
         header_layout.addWidget(message_label, 0)
 
-        # 创建主分割器（水平）- 左侧编辑器，右侧润色结果和输出列表
+        # 创建主分割器（水平）- 左侧文件浏览器，中间编辑器，右侧润色结果和输出列表
         main_splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
         main_splitter.setObjectName("MainSplitter")
         main_splitter.setHandleWidth(3)
         
-        # 左侧：编辑器
+        # 左侧：文件资源管理器
+        main_splitter.addWidget(self.file_explorer)
+        
+        # 中间：编辑器
         main_splitter.addWidget(self.editor)
         
-        # 右侧：创建垂直分割器包含润色结果面板和输出列表
+        # 右侧：创建垂直分割器包含剧情预测开关、润色结果面板和输出列表
+        right_panel = QtWidgets.QWidget()
+        right_panel.setObjectName("RightPanel")
+        right_panel_layout = QtWidgets.QVBoxLayout(right_panel)
+        right_panel_layout.setContentsMargins(0, 0, 0, 0)
+        right_panel_layout.setSpacing(0)
+        
+        # 剧情预测开关（放在右侧面板顶部）
+        self.prediction_toggle = PredictionToggle()
+        right_panel_layout.addWidget(self.prediction_toggle)
+        
+        # 创建垂直分割器包含润色结果面板和输出列表
         right_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
         right_splitter.setObjectName("RightSplitter")
         right_splitter.setHandleWidth(3)
@@ -420,11 +733,16 @@ class MainWindow(QtWidgets.QMainWindow):
         right_splitter.setChildrenCollapsible(False)
         right_splitter.setSizes([300, 300])
         
-        main_splitter.addWidget(right_splitter)
-        main_splitter.setStretchFactor(0, 2)  # 编辑器占2份
-        main_splitter.setStretchFactor(1, 1)  # 右侧面板占1份
+        # 将分割器添加到右侧面板
+        right_panel_layout.addWidget(right_splitter)
+        
+        # 将右侧面板添加到主分割器
+        main_splitter.addWidget(right_panel)
+        main_splitter.setStretchFactor(0, 1)  # 文件浏览器占1份
+        main_splitter.setStretchFactor(1, 2)  # 编辑器占2份
+        main_splitter.setStretchFactor(2, 1)  # 右侧面板（含开关）占1份
         main_splitter.setChildrenCollapsible(False)
-        main_splitter.setSizes([700, 350])
+        main_splitter.setSizes([250, 600, 300])
 
         central_layout.addWidget(header_frame)
         central_layout.addWidget(main_splitter)
@@ -438,6 +756,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._header_frame = header_frame
         self._theme_selector = theme_selector
         self._settings_button = settings_button
+        self._select_export_dir_button = select_export_dir_button
+        self._auto_export_status_label = auto_export_status_label
         self._export_button = export_button
         self._quick_reject_button = quick_reject_button
         self._message_label = message_label
@@ -469,15 +789,39 @@ class MainWindow(QtWidgets.QMainWindow):
         self.polish_result_panel.acceptResult.connect(self._on_overwrite_requested)
         self.polish_result_panel.rejectResult.connect(self._on_reject_requested)
         
+        # 连接实时导出管理器信号
+        self._auto_export_manager.export_started.connect(self._on_auto_export_started)
+        self._auto_export_manager.export_completed.connect(self._on_auto_export_completed)
+        self._auto_export_manager.export_failed.connect(self._on_auto_export_failed)
+        self._auto_export_manager.export_status_changed.connect(self._on_auto_export_status_changed)
+        
+        # 连接文件浏览器信号
+        self.file_explorer.fileOpened.connect(self._on_file_opened)
+        self.file_explorer.newFileRequested.connect(self._on_new_file_requested)
+        
+        # 连接自动保存管理器信号
+        self._auto_save_manager.save_completed.connect(self._on_auto_save_completed)
+        
+        # 连接编辑器文本变化到实时导出
+        self.editor.textChanged.connect(self._on_editor_text_changed_for_export)
+        
+        # 连接剧情预测开关
+        self.prediction_toggle.toggled.connect(self._on_prediction_toggle_changed)
+        
         if self._theme_selector is not None:
             self._theme_selector.currentIndexChanged.connect(self._on_theme_selector_changed)
         if getattr(self, "_settings_button", None) is not None:
             self._settings_button.clicked.connect(self._on_settings_clicked)
+        if getattr(self, "_select_export_dir_button", None) is not None:
+            self._select_export_dir_button.clicked.connect(self._on_select_export_dir_clicked)
         if getattr(self, "_export_button", None) is not None:
             self._export_button.clicked.connect(self._on_export_clicked)
         if getattr(self, "_quick_reject_button", None) is not None:
             self._quick_reject_button.clicked.connect(self._on_quick_reject)
         self._message_timer.timeout.connect(self._clear_status_message)
+        
+        # 加载保存的导出配置
+        self._load_export_config()
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]
         super().resizeEvent(event)
@@ -486,38 +830,37 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _on_editor_enter(self) -> None:
         """处理Enter键：获取刚输入完成的行（上一行）并进行异步润色"""
-        # 因为Enter键已经插入了换行，所以当前光标在新的一行
-        # 我们需要获取上一行（刚输入完成的行）
+        print(f"[DEBUG] Enter键被按下")
+        # 清除所有预测结果（用户已经开始输入新内容）
+        self.polish_result_panel.remove_all_predictions()
+        
         cursor = self.editor.textCursor()
         current_block = cursor.blockNumber()
+        print(f"[DEBUG] 当前行号: {current_block}")
         
-        # 如果当前在第一行，说明没有上一行可以润色
         if current_block == 0:
+            print(f"[DEBUG] 在第一行，不执行润色")
             return
         
-        # 移动到上一行（刚输入完成的行）
         previous_block = current_block - 1
         previous_block_obj = self.editor.document().findBlockByNumber(previous_block)
         previous_line = previous_block_obj.text().strip()
+        print(f"[DEBUG] 上一行内容: {previous_line}")
         
-        # 检查上一行是否有内容
         if not previous_line:
+            print(f"[DEBUG] 上一行为空，不执行润色")
             return
         
-        # 获取上下文（上一行之前的最多5行）
         full_text = self.editor.toPlainText()
         lines = full_text.splitlines()
         
-        # 获取上下文行（上一行之前的最多5行）
         start_context = max(0, previous_block - 5)
         context_lines = lines[start_context:previous_block] if previous_block > 0 else []
         
-        # 异步润色，不阻塞界面，不显示加载遮罩
-        # 调用异步润色，传入上下文和上一行
+        print(f"[DEBUG] 开始执行润色，上下文行数: {len(context_lines)}")
         request_id = self._polish_text_with_context_async(context_lines, previous_line, previous_block)
-        
-        # 保存当前正在润色的行号，用于后续替换
         self._current_polish_line = previous_block
+        print(f"[DEBUG] 润色请求已发送，请求ID: {request_id}")
 
     def _on_editor_tab(self) -> None:
         # 优先处理润色结果面板中的内容
@@ -541,7 +884,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # 连接配置变化信号
         dialog.configChanged.connect(self._on_config_changed)
         
-        dialog.exec_()
+        dialog.exec()
 
     def _on_config_changed(self) -> None:
         """配置变化回调"""
@@ -549,16 +892,53 @@ class MainWindow(QtWidgets.QMainWindow):
         self._api_client.update_config(self._config_manager)
         self._show_message("配置已更新", duration_ms=2000, is_error=False)
 
+    def _on_select_export_dir_clicked(self) -> None:
+        """选择导出目录"""
+        # 获取当前配置的导出目录作为默认路径
+        current_export_dir = self._config_manager.get_export_config().export_directory
+        default_dir = current_export_dir if current_export_dir and os.path.isdir(current_export_dir) else ""
+        
+        folder_path = QFileDialog.getExistingDirectory(
+            self,
+            "选择实时导出目录",
+            default_dir,
+            QFileDialog.ShowDirsOnly | QFileDialog.DontResolveSymlinks
+        )
+        
+        if folder_path:
+            # 保存导出目录到配置
+            self._config_manager.update_export_config(
+                export_directory=folder_path,
+                auto_export_enabled=True
+            )
+            
+            # 更新导出管理器
+            self._auto_export_manager.set_export_directory(folder_path)
+            
+            # 立即执行一次导出
+            text = self.editor.toPlainText()
+            if text.strip():
+                self._auto_export_manager.export_now(text)
+            
+            self._show_message(f"已设置实时导出目录: {Path(folder_path).name}", duration_ms=3000, is_error=False)
+    
     def _on_export_clicked(self) -> None:
+        """手动导出到用户选择的文件"""
         text = self.editor.toPlainText()
         if not text.strip():
             self._show_message("没有可导出的文本内容。", duration_ms=2000, is_error=True)
             return
         
+        # 获取默认文件名和目录
+        export_config = self._config_manager.get_export_config()
+        default_filename = export_config.export_filename or "字见润新.txt"
+        default_dir = export_config.export_directory if export_config.export_directory else ""
+        default_path = os.path.join(default_dir, default_filename) if default_dir else default_filename
+        
         file_path, _ = QFileDialog.getSaveFileName(
             self,
-            "导出文本",
-            "novel_text.txt",
+            "手动导出文本",
+            default_path,
             "文本文件 (*.txt);;所有文件 (*)"
         )
         
@@ -570,44 +950,328 @@ class MainWindow(QtWidgets.QMainWindow):
             except Exception as e:
                 self._show_message(f"导出失败: {str(e)}", duration_ms=3000, is_error=True)
     
+    def _load_export_config(self) -> None:
+        """加载保存的导出配置"""
+        export_config = self._config_manager.get_export_config()
+        
+        if export_config.export_directory:
+            self._auto_export_manager.set_export_directory(export_config.export_directory)
+            self._auto_export_manager.set_export_filename(export_config.export_filename)
+            
+            if export_config.auto_export_enabled:
+                self._auto_export_manager.set_enabled(True)
+    
+    def _on_editor_text_changed_for_export(self) -> None:
+        """编辑器文本变化时，请求实时导出"""
+        text = self.editor.toPlainText()
+        self._auto_export_manager.request_export(text)
+    
+    def _on_auto_export_started(self, file_path: str) -> None:
+        """实时导出开始"""
+        # 可以在这里显示导出开始的提示，但为了不干扰用户，暂时不显示
+        pass
+    
+    def _on_auto_export_completed(self, file_path: str) -> None:
+        """实时导出完成"""
+        # 简短提示，不干扰用户
+        filename = Path(file_path).name
+        # 可以选择性地显示提示，或者只更新状态标签
+        # self._show_message(f"已保存到: {filename}", duration_ms=1000, is_error=False)
+    
+    def _on_auto_export_failed(self, error_message: str) -> None:
+        """实时导出失败"""
+        self._show_message(f"实时导出失败: {error_message}", duration_ms=3000, is_error=True)
+    
+    def _on_auto_export_status_changed(self, enabled: bool) -> None:
+        """实时导出状态变化"""
+        if self._auto_export_status_label is not None:
+            if enabled:
+                export_path = self._auto_export_manager.get_export_path()
+                if export_path:
+                    folder_name = Path(export_path).parent.name
+                    self._auto_export_status_label.setText(f"实时导出: {folder_name}")
+            else:
+                self._auto_export_status_label.setText("实时导出: 未启用")
+    
+    def _on_import_folder(self) -> None:
+        """导入文件夹"""
+        # 获取上次打开的文件夹作为默认路径
+        workspace_config = self._config_manager.get_workspace_config()
+        default_dir = workspace_config.last_opened_folder if workspace_config.last_opened_folder and os.path.isdir(workspace_config.last_opened_folder) else ""
+        
+        folder_path = QFileDialog.getExistingDirectory(
+            self,
+            "选择文件夹",
+            default_dir,
+            QFileDialog.ShowDirsOnly | QFileDialog.DontResolveSymlinks
+        )
+        
+        if folder_path:
+            self.file_explorer.load_folder(folder_path)
+            # 保存文件夹路径到配置
+            self._config_manager.update_last_opened_folder(folder_path)
+            self._show_message(f"已导入文件夹: {Path(folder_path).name}", duration_ms=2000, is_error=False)
+    
+    def _on_create_knowledge_base(self) -> None:
+        """创建知识库"""
+        # 获取当前选中的文件夹
+        current_folder = self.file_explorer.get_current_folder()
+        if not current_folder:
+            QtWidgets.QMessageBox.warning(
+                self, "错误", 
+                "请先导入文件夹并选中要创建知识库的目录。"
+            )
+            return
+        
+        # 检查向量化API配置
+        api_config = self._config_manager.get_api_config()
+        if not api_config.embedding_api_key:
+            reply = QtWidgets.QMessageBox.question(
+                self, "缺少配置",
+                "尚未配置阿里云向量化API密钥，是否前往设置？",
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No
+            )
+            
+            if reply == QtWidgets.QMessageBox.Yes:
+                self._on_settings_clicked()
+            return
+        
+        # 显示加载提示
+        self._show_message("正在连接API，请稍候...", duration_ms=0, is_error=False)
+        QtWidgets.QApplication.processEvents()  # 强制刷新UI
+        
+        # 测试API连接
+        self._kb_manager.set_embedding_client(
+            api_config.embedding_api_key,
+            api_config.embedding_model
+        )
+        
+        success, message = self._kb_manager.test_embedding_connection()
+        
+        # 清除加载提示
+        self._clear_status_message()
+        
+        if not success:
+            reply = QtWidgets.QMessageBox.question(
+                self, "API连接测试失败",
+                f"{message}\n\n是否仍要继续创建知识库？",
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No
+            )
+            
+            if reply == QtWidgets.QMessageBox.No:
+                return
+        
+        # 输入知识库名称
+        kb_name, ok = QtWidgets.QInputDialog.getText(
+            self, "创建知识库",
+            "请输入知识库名称:"
+        )
+        
+        if not ok or not kb_name.strip():
+            return
+        
+        # 创建进度对话框
+        progress_dialog = KnowledgeBaseProgressDialog(self)
+        progress_dialog.set_theme(self._current_theme)
+        
+        # 向量化客户端已在测试连接时设置
+        
+        # 在后台线程创建知识库
+        from PySide6.QtCore import QThread
+        
+        class KBCreationWorker(QThread):
+            def __init__(self, kb_manager, name, folder, dialog):
+                super().__init__()
+                self.kb_manager = kb_manager
+                self.name = name
+                self.folder = folder
+                self.dialog = dialog
+                self.result = None
+            
+            def run(self):
+                self.result = self.kb_manager.create_knowledge_base(
+                    name=self.name,
+                    folder_path=self.folder,
+                    progress_callback=lambda c, t, m: self.dialog.update_progress(c, t, m),
+                    error_callback=lambda e: self.dialog.log(f"错误: {e}")
+                )
+        
+        worker = KBCreationWorker(self._kb_manager, kb_name.strip(), current_folder, progress_dialog)
+        worker.finished.connect(lambda: self._on_kb_creation_finished(worker, progress_dialog))
+        worker.start()
+        
+        progress_dialog.exec()
+    
+    def _on_kb_creation_finished(self, worker, dialog):
+        """知识库创建完成"""
+        if worker.result:
+            dialog.set_completed(success=True)
+            self._show_message(f"知识库创建成功: {worker.result.name}", duration_ms=3000, is_error=False)
+        else:
+            dialog.set_completed(success=False)
+            self._show_message("知识库创建失败", duration_ms=3000, is_error=True)
+    
     def _polish_text_with_context_async(self, context_lines: list[str], target_line: str, line_number: int) -> str:
-        """使用上下文异步润色文本（不阻塞界面）"""
-        # 获取当前选中的风格组合提示词
-        selected_styles = self._style_manager.get_selected_styles()
-        style_prompt = self._style_manager.get_combined_prompt(selected_styles) if selected_styles else None
+        """使用上下文异步润色文本（使用请求队列避免与预测冲突）"""
+        import sys
+        print(f"[DEBUG] _polish_text_with_context_async 被调用", flush=True)
+        sys.stdout.flush()
         
-        # 使用worker方式处理（异步，不阻塞界面）
-        group_id = next(self._group_sequence)
-        self._pending_group_id = group_id
+        try:
+            # 获取当前选中的风格组合提示词
+            selected_styles = self._style_manager.get_selected_styles()
+            style_prompt = self._style_manager.get_combined_prompt(selected_styles) if selected_styles else None
+            print(f"[DEBUG] 风格提示词: {style_prompt}", flush=True)
+            sys.stdout.flush()
+            
+            # 生成请求ID
+            group_id = next(self._group_sequence)
+            request_id = f"polish_{group_id}"
+            self._pending_group_id = group_id
+            
+            # 使用请求队列管理器执行（高优先级，避免与预测冲突）
+            # 注意：RequestType 和 RequestPriority 已在文件顶部导入
+            
+            # 捕获变量以避免闭包问题
+            _target_line = target_line
+            _line_number = line_number
+            _context_lines = context_lines
+            _style_prompt = style_prompt
+            
+            # 定义执行函数 - 直接调用API
+            def execute_polish():
+                print(f"[DEBUG] 队列中执行润色: {_target_line[:30]}", flush=True)
+                return self._api_client.polish_last_line(_context_lines, _target_line, _style_prompt or "")
+            
+            # 定义成功回调（在主线程中执行）
+            def on_success(polished_text):
+                print(f"[DEBUG] 润色成功回调: {polished_text[:30] if polished_text else 'None'}", flush=True)
+                # 使用QMetaObject.invokeMethod确保在主线程中调用
+                QtCore.QMetaObject.invokeMethod(
+                    self,
+                    "_handle_polish_success",
+                    QtCore.Qt.QueuedConnection,
+                    QtCore.Q_ARG(str, polished_text),
+                    QtCore.Q_ARG(str, _target_line),
+                    QtCore.Q_ARG(int, _line_number)
+                )
+                print(f"[DEBUG] invokeMethod 已调用", flush=True)
+            
+            # 定义失败回调
+            def on_error(error_message):
+                print(f"[DEBUG] 润色失败回调: {error_message}", flush=True)
+                QtCore.QMetaObject.invokeMethod(
+                    self,
+                    "_handle_polish_error",
+                    QtCore.Qt.QueuedConnection,
+                    QtCore.Q_ARG(str, error_message)
+                )
+            
+            # 添加到请求队列（高优先级）
+            self._request_queue_manager.add_request(
+                request_id=request_id,
+                request_type=RequestType.POLISH,
+                priority=RequestPriority.HIGH,
+                execute_func=execute_polish,
+                on_success=on_success,
+                on_error=on_error
+            )
+            
+            print(f"[DEBUG] 润色请求已加入队列: {request_id}", flush=True)
+            sys.stdout.flush()
+            
+            return request_id
+        except Exception as e:
+            print(f"[ERROR] _polish_text_with_context_async 发生异常: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+            sys.stdout.flush()
+            raise
+    
+    @QtCore.Slot(str, str, int)
+    def _handle_polish_success(self, polished_text: str, original_text: str, line_number: int):
+        """处理润色成功（Qt Slot，可从其他线程调用）"""
+        print(f"[DEBUG] _handle_polish_success 被调用", flush=True)
+        print(f"[DEBUG] 参数: polished_text={polished_text[:30]}, original_text={original_text[:20]}, line_number={line_number}", flush=True)
+        try:
+            self._on_context_polish_finished(polished_text, original_text, line_number)
+        except Exception as e:
+            print(f"[ERROR] _handle_polish_success 发生异常: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+    
+    @QtCore.Slot(str)
+    def _handle_polish_error(self, error_message: str):
+        """处理润色失败（Qt Slot，可从其他线程调用）"""
+        print(f"[DEBUG] _handle_polish_error 被调用", flush=True)
+        self._on_context_polish_error_wrapper(error_message)
+    
+    def _on_context_polish_finished_wrapper(self, polished_text: str, original_text: str, line_number: int) -> None:
+        """上下文润色完成回调包装器（用于 partial）"""
+        import sys
+        print(f"[DEBUG] _on_context_polish_finished_wrapper 被调用", flush=True)
+        print(f"[DEBUG] 参数: polished_text={polished_text[:30]}, original_text={original_text[:20]}, line_number={line_number}", flush=True)
+        sys.stdout.flush()
         
-        # 不设置polish_state，保持界面可编辑
-        # self._set_polish_state(True)  # 注释掉这行，避免锁定编辑器
-        
-        worker = PolishWorker(self._api_client, context_lines, target_line, style_prompt)
-        worker.signals.finished.connect(
-            lambda polished: self._on_context_polish_finished(polished, target_line, line_number)
-        )
-        worker.signals.error.connect(
-            lambda error_message: self._on_context_polish_error(error_message)
-        )
-        self._thread_pool.start(worker)
-        
-        return f"request_{group_id}"
+        try:
+            self._on_context_polish_finished(polished_text, original_text, line_number)
+        except Exception as e:
+            print(f"[ERROR] _on_context_polish_finished_wrapper 发生异常: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+            sys.stdout.flush()
     
     def _on_context_polish_finished(self, polished_text: str, original_text: str, line_number: int) -> None:
         """上下文润色完成回调"""
-        # 在润色结果面板显示结果
-        self.polish_result_panel.add_result(original_text, polished_text, line_number)
+        import sys
+        print(f"[DEBUG] _on_context_polish_finished 被调用", flush=True)
+        print(f"[DEBUG] 润色完成 - 原文: {original_text[:20]}... 润色后: {polished_text[:20]}... 行号: {line_number}", flush=True)
+        sys.stdout.flush()
         
-        # 不设置polish_state，保持界面可编辑
-        # self._set_polish_state(False)
-        self._pending_group_id = None
+        try:
+            # 在润色结果面板显示结果
+            print(f"[DEBUG] 调用 polish_result_panel.add_result", flush=True)
+            sys.stdout.flush()
+            
+            self.polish_result_panel.add_result(original_text, polished_text, line_number)
+            
+            print(f"[DEBUG] add_result 完成", flush=True)
+            sys.stdout.flush()
+            
+            # 不设置polish_state，保持界面可编辑
+            # self._set_polish_state(False)
+            self._pending_group_id = None
+            
+            # 简短提示，不干扰用户
+            self._show_message("润色完成，按TAB键覆盖，按~键拒绝", duration_ms=2000, is_error=False)
+            print(f"[DEBUG] _on_context_polish_finished 完成", flush=True)
+            sys.stdout.flush()
+        except Exception as e:
+            print(f"[ERROR] _on_context_polish_finished 发生异常: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+            sys.stdout.flush()
+    
+    def _on_context_polish_error_wrapper(self, error_message: str) -> None:
+        """上下文润色失败回调包装器（用于 partial）"""
+        import sys
+        print(f"[DEBUG] _on_context_polish_error_wrapper 被调用，错误: {error_message}", flush=True)
+        sys.stdout.flush()
         
-        # 简短提示，不干扰用户
-        self._show_message("润色完成，按TAB键覆盖，按~键拒绝", duration_ms=2000, is_error=False)
+        try:
+            self._on_context_polish_error(error_message)
+        except Exception as e:
+            print(f"[ERROR] _on_context_polish_error_wrapper 发生异常: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+            sys.stdout.flush()
     
     def _on_context_polish_error(self, error_message: str) -> None:
         """上下文润色失败回调"""
+        import sys
+        print(f"[DEBUG] _on_context_polish_error 被调用，错误: {error_message}", flush=True)
+        sys.stdout.flush()
+        
         self._set_polish_state(False)
         self._pending_group_id = None
         self._show_message(f"润色失败：{error_message}", duration_ms=3600, is_error=True)
@@ -660,17 +1324,13 @@ class MainWindow(QtWidgets.QMainWindow):
         """输入停止3秒后的处理 - 触发剧情预测
         
         触发条件：
-        1. 用户停止输入达到3秒
-        2. 存在润色行（历史或当前）
+        1. 剧情预测开关已开启
+        2. 用户停止输入达到3秒
+        3. 文本内容不为空
+        4. 没有待处理的预测结果（避免重复预测）
         """
-        # 检查是否存在润色行（检查润色结果面板是否有历史数据）
-        has_polish_results = self.polish_result_panel.get_result_count() > 0
-        
-        # 检查是否有输出列表中的历史润色记录
-        has_output_history = self.output_list.count() > 0
-        
-        # 如果不存在润色行，不触发预测
-        if not (has_polish_results or has_output_history):
+        # 检查剧情预测开关是否开启
+        if not hasattr(self, 'prediction_toggle') or not self.prediction_toggle.is_enabled():
             return
         
         # 获取当前编辑器中的全部文本
@@ -680,23 +1340,82 @@ class MainWindow(QtWidgets.QMainWindow):
         if not full_text:
             return
         
+        # 检查是否已有预测结果未处理（避免重复预测）
+        if self.polish_result_panel.has_prediction_results():
+            return
+        
         # 异步调用剧情预测
         self._predict_plot_continuation_async(full_text)
     
     def _predict_plot_continuation_async(self, full_text: str) -> None:
-        """异步预测剧情续写（不阻塞界面）
+        """异步预测剧情续写（使用请求队列避免与润色冲突）
         
         Args:
             full_text: 当前编辑器中的全部文本内容
         """
-        # 使用后台线程处理，不阻塞界面
-        worker = PlotPredictionWorker(self._api_client, full_text)
-        worker.signals.finished.connect(self._on_plot_prediction_finished)
-        worker.signals.error.connect(self._on_plot_prediction_error)
-        self._thread_pool.start(worker)
+        # 获取当前选中的风格组合提示词
+        selected_styles = self._style_manager.get_selected_styles()
+        style_prompt = self._style_manager.get_combined_prompt(selected_styles) if selected_styles else None
+        
+        # 生成请求ID
+        import time
+        request_id = f"prediction_{int(time.time() * 1000)}"
+        
+        # 使用请求队列管理器执行（低优先级，让润色请求优先）
+        # 注意：RequestType 和 RequestPriority 已在文件顶部导入
+        
+        # 捕获变量
+        _full_text = full_text
+        _style_prompt = style_prompt
+        
+        # 定义执行函数
+        def execute_prediction():
+            return self._api_client.predict_plot_continuation(_full_text, _style_prompt or "")
+        
+        # 定义成功回调（需要在主线程中执行）
+        def on_success(predicted_text):
+            print(f"[DEBUG] 预测成功回调", flush=True)
+            QtCore.QMetaObject.invokeMethod(
+                self,
+                "_handle_prediction_success",
+                QtCore.Qt.QueuedConnection,
+                QtCore.Q_ARG(str, predicted_text)
+            )
+            print(f"[DEBUG] 预测 invokeMethod 已调用", flush=True)
+        
+        # 定义失败回调
+        def on_error(error_message):
+            QtCore.QMetaObject.invokeMethod(
+                self,
+                "_handle_prediction_error",
+                QtCore.Qt.QueuedConnection,
+                QtCore.Q_ARG(str, error_message)
+            )
+        
+        # 添加到请求队列（低优先级，让润色请求先执行）
+        self._request_queue_manager.add_request(
+            request_id=request_id,
+            request_type=RequestType.PREDICTION,
+            priority=RequestPriority.LOW,
+            execute_func=execute_prediction,
+            on_success=on_success,
+            on_error=on_error
+        )
         
         # 显示简短提示，不干扰用户
-        self._show_message("正在预测剧情...", duration_ms=1500, is_error=False)
+        self._show_message("剧情预测已加入队列...", duration_ms=1500, is_error=False)
+    
+    @QtCore.Slot(str)
+    def _handle_prediction_success(self, predicted_text: str):
+        """处理预测成功（Qt Slot，可从其他线程调用）"""
+        print(f"[DEBUG] _handle_prediction_success 被调用", flush=True)
+        self._on_plot_prediction_finished(predicted_text)
+    
+    @QtCore.Slot(str)
+    def _handle_prediction_error(self, error_message: str):
+        """处理预测失败（Qt Slot，可从其他线程调用）"""
+        print(f"[DEBUG] _handle_prediction_error 被调用", flush=True)
+        self._on_plot_prediction_error(error_message)
     
     def _on_plot_prediction_finished(self, predicted_text: str) -> None:
         """剧情预测完成回调
@@ -841,38 +1560,83 @@ class MainWindow(QtWidgets.QMainWindow):
     
     def _on_reject_requested(self) -> None:
         """处理一键拒绝请求（~键） - 批量拒绝所有润色结果"""
-        # 获取结果数量
         result_count = self.polish_result_panel.get_result_count()
         if result_count == 0:
             self._show_message("没有可拒绝的润色结果", duration_ms=1500, is_error=True)
             return
         
-        # 清空所有结果并隐藏面板
         self.polish_result_panel.hide_result()
-        
-        # 显示结果消息
         self._show_message(f"已批量拒绝 {result_count} 个润色结果", duration_ms=1500, is_error=False)
 
     def _start_polish(self, context_lines: list[str], target_line: str) -> None:
+        """开始润色（使用请求队列避免冲突）"""
         group_id = next(self._group_sequence)
         self._pending_group_id = group_id
         self._add_output_entry(text=target_line, is_original=True, group_id=group_id)
         self._set_polish_state(True)
-        self._show_message("正在润色最后一行…", duration_ms=0, is_error=False)
+        self._show_message("润色请求已加入队列…", duration_ms=0, is_error=False)
 
         # 获取当前选中的风格组合提示词
         selected_styles = self._style_manager.get_selected_styles()
         style_prompt = self._style_manager.get_combined_prompt(selected_styles) if selected_styles else None
-
-        worker = PolishWorker(self._api_client, context_lines, target_line, style_prompt)
-        worker.signals.finished.connect(
-            lambda polished, gid=group_id: self._on_polish_finished(gid, polished)
+        
+        # 使用请求队列管理器执行
+        # 注意：RequestType 和 RequestPriority 已在文件顶部导入
+        
+        request_id = f"polish_legacy_{group_id}"
+        
+        # 捕获变量
+        _group_id = group_id
+        _context_lines = context_lines
+        _target_line = target_line
+        _style_prompt = style_prompt
+        
+        # 定义执行函数
+        def execute_polish():
+            return self._api_client.polish_last_line(_context_lines, _target_line, _style_prompt or "")
+        
+        # 定义成功回调
+        def on_success(polished_text):
+            QtCore.QMetaObject.invokeMethod(
+                self,
+                "_handle_legacy_polish_success",
+                QtCore.Qt.QueuedConnection,
+                QtCore.Q_ARG(int, _group_id),
+                QtCore.Q_ARG(str, polished_text)
+            )
+        
+        # 定义失败回调
+        def on_error(error_message):
+            QtCore.QMetaObject.invokeMethod(
+                self,
+                "_handle_legacy_polish_error",
+                QtCore.Qt.QueuedConnection,
+                QtCore.Q_ARG(int, _group_id),
+                QtCore.Q_ARG(str, error_message)
+            )
+        
+        # 添加到请求队列（高优先级）
+        self._request_queue_manager.add_request(
+            request_id=request_id,
+            request_type=RequestType.POLISH,
+            priority=RequestPriority.HIGH,
+            execute_func=execute_polish,
+            on_success=on_success,
+            on_error=on_error
         )
-        worker.signals.error.connect(
-            lambda error_message, gid=group_id: self._on_polish_error(gid, error_message)
-        )
-        self._thread_pool.start(worker)
 
+    @QtCore.Slot(int, str)
+    def _handle_legacy_polish_success(self, group_id: int, polished_text: str):
+        """处理旧版润色成功（Qt Slot，可从其他线程调用）"""
+        print(f"[DEBUG] _handle_legacy_polish_success 被调用", flush=True)
+        self._on_polish_finished(group_id, polished_text)
+    
+    @QtCore.Slot(int, str)
+    def _handle_legacy_polish_error(self, group_id: int, error_message: str):
+        """处理旧版润色失败（Qt Slot，可从其他线程调用）"""
+        print(f"[DEBUG] _handle_legacy_polish_error 被调用", flush=True)
+        self._on_polish_error(group_id, error_message)
+    
     def _on_polish_finished(self, group_id: int, polished_text: str) -> None:
         self._add_output_entry(text=polished_text, is_original=False, group_id=group_id)
         self._set_polish_state(False)
@@ -1046,6 +1810,17 @@ class MainWindow(QtWidgets.QMainWindow):
                     "  width: 18px;",
                     "  border: none;",
                     "}",
+                    "QPushButton#SelectExportDirButton {",
+                    f"  background-color: {theme['buttonBackground']};",
+                    f"  color: {theme['buttonForeground']};",
+                    f"  border: 1px solid {theme['borderColor']};",
+                    "  border-radius: 4px;",
+                    "  padding: 6px 14px;",
+                    "}",
+                    "QPushButton#SelectExportDirButton:hover {",
+                    f"  background-color: {theme['accent']};",
+                    "  color: #ffffff;",
+                    "}",
                     "QPushButton#ExportButton {",
                     f"  background-color: {theme['buttonBackground']};",
                     f"  color: {theme['buttonForeground']};",
@@ -1056,6 +1831,14 @@ class MainWindow(QtWidgets.QMainWindow):
                     "QPushButton#ExportButton:hover {",
                     f"  background-color: {theme['accent']};",
                     "  color: #ffffff;",
+                    "}",
+                    "QLabel#AutoExportStatusLabel {",
+                    "  font-size: 11px;",
+                    f"  color: {theme.get('accent', '#007acc')};",
+                    "  padding: 4px 8px;",
+                    f"  border: 1px solid {theme['borderColor']};",
+                    "  border-radius: 3px;",
+                    f"  background-color: {theme.get('panelBackground', '#2d2d30')};",
                     "}",
                     "QPushButton#QuickRejectButton {",
                     f"  background-color: {theme.get('buttonBackground', '#3a3d41')};",
@@ -1123,6 +1906,14 @@ class MainWindow(QtWidgets.QMainWindow):
         # 更新润色结果面板主题
         if hasattr(self, 'polish_result_panel'):
             self.polish_result_panel.update_theme(self._current_theme)
+        
+        # 更新文件资源管理器主题
+        if hasattr(self, 'file_explorer'):
+            self.file_explorer.set_theme(self._current_theme)
+        
+        # 更新剧情预测开关主题
+        if hasattr(self, 'prediction_toggle'):
+            self.prediction_toggle.set_theme(self._current_theme)
 
     def _show_message(self, message: str, duration_ms: int, is_error: bool) -> None:
         if self._message_label is None:
@@ -1138,20 +1929,318 @@ class MainWindow(QtWidgets.QMainWindow):
         if self._message_label is None:
             return
         self._message_label.clear()
+    
+    def _on_request_started(self, request_id: str, request_type: str):
+        """请求开始处理"""
+        # 可选：更新UI显示处理状态
+        pass
+    
+    def _on_request_completed(self, request_id: str, result):
+        """请求完成"""
+        # 可选：记录完成状态
+        pass
+    
+    def _on_request_failed(self, request_id: str, error_message: str):
+        """请求失败"""
+        # 可选：记录失败状态
+        pass
+    
+    def _on_file_opened(self, file_path: str):
+        """文件被打开"""
+        print(f"[INFO] 打开文件: {file_path}", flush=True)
+        
+        # 读取文件内容
+        content = DocumentHandler.read_document(file_path)
+        
+        if content is None:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "错误",
+                f"无法读取文件：{file_path}\n\n请检查文件格式是否支持。"
+            )
+            return
+        
+        # 设置到编辑器
+        self.editor.setPlainText(content)
+        
+        # 保存当前文件路径
+        self._current_file_path = file_path
+        
+        # 启动自动保存
+        self._auto_save_manager.start(
+            file_path=file_path,
+            get_content_func=lambda: self.editor.toPlainText(),
+            save_func=DocumentHandler.write_document
+        )
+        
+        self._show_message(f"已打开文件：{Path(file_path).name}，自动保存已启用", duration_ms=3000, is_error=False)
+    
+    def _on_new_file_requested(self, file_path: str):
+        """创建新文件"""
+        print(f"[INFO] 创建新文件: {file_path}", flush=True)
+        
+        # 创建新文件
+        success = DocumentHandler.create_new_document(file_path, "# 新建文档\n\n开始您的创作...")
+        
+        if not success:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "错误",
+                f"无法创建文件：{file_path}"
+            )
+            return
+        
+        # 读取并打开新文件
+        self._on_file_opened(file_path)
+        
+        # 刷新文件浏览器
+        self.file_explorer._refresh()
+    
+    def _on_auto_save_completed(self, success: bool, message: str):
+        """自动保存完成"""
+        if success:
+            # 显示简短提示（不干扰用户）
+            self._show_message(message, duration_ms=1500, is_error=False)
+        else:
+            # 显示错误
+            self._show_message(f"自动保存失败: {message}", duration_ms=3000, is_error=True)
+    
+    def _on_batch_polish_clicked(self):
+        """一键润色按钮点击 - 直接使用当前润色风格"""
+        try:
+            # 获取当前编辑器内容
+            content = self.editor.toPlainText().strip()
+            
+            if not content:
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "提示",
+                    "编辑器内容为空，无法进行批量润色。\n\n请先输入或打开文档。"
+                )
+                return
+            
+            # 获取当前选中的润色风格
+            try:
+                selected_styles = self._style_manager.get_selected_styles()
+            except Exception as e:
+                print(f"[ERROR] 获取润色风格失败: {e}", flush=True)
+                import traceback
+                traceback.print_exc()
+                QtWidgets.QMessageBox.critical(
+                    self,
+                    "错误",
+                    f"获取润色风格失败：{str(e)}\n\n请检查设置或重启应用。"
+                )
+                return
+            
+            if not selected_styles:
+                # 如果没有选择风格，提示用户先设置风格
+                reply = QtWidgets.QMessageBox.question(
+                    self,
+                    "未选择润色风格",
+                    "您还未选择润色风格。\n\n"
+                    "一键润色功能需要使用您在设置中选择的润色风格。\n"
+                    "是否现在打开设置选择风格？",
+                    QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                    QtWidgets.QMessageBox.Yes
+                )
+                
+                if reply == QtWidgets.QMessageBox.Yes:
+                    self._on_settings_clicked()
+                return
+            
+            # 显示风格信息并确认
+            try:
+                style_names = [style.name for style in selected_styles]
+                style_list = "、".join(style_names)
+            except Exception as e:
+                print(f"[ERROR] 处理风格名称失败: {e}", flush=True)
+                import traceback
+                traceback.print_exc()
+                style_list = "未知风格"
+            
+            reply = QtWidgets.QMessageBox.question(
+                self,
+                "确认批量润色",
+                f"将使用以下润色风格对整个文档进行润色：\n\n"
+                f"【当前风格】{style_list}\n\n"
+                f"文档字数：约 {len(content)} 字\n\n"
+                f"⚠️ 注意：此操作将替换文档内容，建议先备份。\n\n"
+                f"确定要继续吗？",
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                QtWidgets.QMessageBox.No
+            )
+            
+            if reply == QtWidgets.QMessageBox.Yes:
+                # 直接调用润色，不需要额外的需求输入
+                self._on_batch_polish_requested("", content)
+                
+        except Exception as e:
+            # 捕获所有未处理的异常，防止闪退
+            print(f"[ERROR] 一键润色发生未知错误: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+            QtWidgets.QMessageBox.critical(
+                self,
+                "错误",
+                f"一键润色功能发生错误：\n\n{str(e)}\n\n请查看控制台日志了解详情。"
+            )
+    
+    def _on_batch_polish_requested(self, requirement: str, original_content: str):
+        """执行批量润色
+        
+        Args:
+            requirement: 额外的润色需求（可为空，空时仅使用当前选中的风格）
+            original_content: 要润色的原始内容
+        """
+        try:
+            print(f"[INFO] 开始批量润色，额外需求: {requirement[:50] if requirement else '无'}...", flush=True)
+            
+            # 获取用户当前设置的风格提示词（一键润色直接使用用户风格设置）
+            try:
+                selected_styles = self._style_manager.get_selected_styles()
+                style_prompt = self._style_manager.get_combined_prompt(selected_styles) if selected_styles else ""
+            except Exception as e:
+                print(f"[ERROR] 获取风格提示词失败: {e}", flush=True)
+                import traceback
+                traceback.print_exc()
+                style_prompt = ""
+            
+            # 构建最终的润色提示词
+            if requirement:
+                # 如果有额外需求，将风格和需求合并
+                combined_requirement = f"【基础润色风格】\n{style_prompt}\n\n【额外需求】\n{requirement}" if style_prompt else requirement
+            else:
+                # 一键润色：只使用当前选中的风格，无需额外需求
+                combined_requirement = style_prompt if style_prompt else "请润色以下文本，保持原意的同时提升表达质量。"
+            
+            print(f"[DEBUG] 使用当前风格进行润色，提示词长度: {len(combined_requirement)}", flush=True)
+            
+            # 显示进度对话框
+            progress_dialog = QtWidgets.QProgressDialog(
+                "正在润色文档...\n\n这可能需要一些时间，请耐心等待。",
+                "取消",
+                0,
+                0,
+                self
+            )
+            progress_dialog.setWindowTitle("批量润色中")
+            progress_dialog.setWindowModality(QtCore.Qt.WindowModal)
+            progress_dialog.setMinimumDuration(0)
+            progress_dialog.setValue(0)
+            
+            # 在后台线程中执行，使用合并后的提示词
+            # 保存worker引用，防止被垃圾回收
+            self._batch_polish_worker = BatchPolishWorker(self._api_client, original_content, combined_requirement)
+            self._batch_polish_worker.finished.connect(lambda polished: self._on_batch_polish_finished(polished, progress_dialog))
+            self._batch_polish_worker.error.connect(lambda error_msg: self._on_batch_polish_error(error_msg, progress_dialog))
+            self._batch_polish_worker.start()
+            
+            # 显示进度对话框
+            progress_dialog.show()
+            
+        except Exception as e:
+            # 捕获所有未处理的异常，防止闪退
+            print(f"[ERROR] 执行批量润色时发生错误: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+            QtWidgets.QMessageBox.critical(
+                self,
+                "错误",
+                f"执行批量润色时发生错误：\n\n{str(e)}\n\n请查看控制台日志了解详情。"
+            )
+    
+    def _on_batch_polish_finished(self, polished_content: str, progress_dialog):
+        """批量润色完成"""
+        try:
+            progress_dialog.close()
+            
+            # 替换编辑器内容
+            self.editor.setPlainText(polished_content)
+            
+            # 如果有打开的文件，立即保存
+            if self._current_file_path and self._auto_save_manager.is_enabled:
+                self._auto_save_manager.save_now()
+            
+            QtWidgets.QMessageBox.information(
+                self,
+                "润色完成",
+                f"文档已成功润色！\n\n原文档字数：约{len(polished_content)}字"
+            )
+            
+            self._show_message("批量润色完成", duration_ms=3000, is_error=False)
+            
+        except Exception as e:
+            print(f"[ERROR] 处理润色完成时发生错误: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+            QtWidgets.QMessageBox.critical(
+                self,
+                "错误",
+                f"处理润色结果时发生错误：\n\n{str(e)}"
+            )
+    
+    def _on_batch_polish_error(self, error_message: str, progress_dialog):
+        """批量润色失败"""
+        try:
+            progress_dialog.close()
+            
+            QtWidgets.QMessageBox.warning(
+                self,
+                "润色失败",
+                f"批量润色失败：\n\n{error_message}"
+            )
+            
+            self._show_message(f"批量润色失败: {error_message}", duration_ms=3000, is_error=True)
+            
+        except Exception as e:
+            print(f"[ERROR] 处理润色错误时发生异常: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+    
+    def closeEvent(self, event):
+        """窗口关闭事件 - 清理资源"""
+        try:
+            # 停止自动保存管理器
+            if hasattr(self, '_auto_save_manager') and self._auto_save_manager:
+                self._auto_save_manager.stop()
+            
+            # 停止请求队列管理器
+            if hasattr(self, '_request_queue_manager') and self._request_queue_manager:
+                self._request_queue_manager.stop()
+            
+            # 停止心跳管理器
+            if hasattr(self, '_heartbeat_manager') and self._heartbeat_manager:
+                self._heartbeat_manager.stop()
+            
+            # 停止异步润色处理器
+            if hasattr(self, '_async_polish_processor') and self._async_polish_processor:
+                if hasattr(self._async_polish_processor, 'worker') and self._async_polish_processor.worker:
+                    self._async_polish_processor.worker.stop()
+            
+            # 关闭API客户端连接池
+            if hasattr(self, '_api_client') and self._api_client:
+                self._api_client.close()
+            
+            # 接受关闭事件
+            event.accept()
+        except Exception as e:
+            # 即使出错也要关闭窗口
+            print(f"[WARNING] 关闭时清理资源出错: {e}")
+            event.accept()
 
 
 def main() -> None:
-    QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling, True)
     load_dotenv()
     app = QtWidgets.QApplication(sys.argv)
-    app.setApplicationName("VSCode风格小说润色器")
-    app.setOrganizationName("NovelPolisherStudio")
+    app.setApplicationName("字见润新")
+    app.setOrganizationName("GuojiRunse")
     app.setStyle("Fusion")
 
     window = MainWindow()
     window.show()
 
-    sys.exit(app.exec_())
+    sys.exit(app.exec())
 
 
 if __name__ == "__main__":

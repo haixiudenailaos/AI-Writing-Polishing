@@ -6,7 +6,7 @@
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, asdict
 import json
-from config_manager import PolishStyle, ConfigManager
+from app.config_manager import PolishStyle, ConfigManager
 
 
 @dataclass

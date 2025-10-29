@@ -1,6 +1,6 @@
 """
 FastAPI 后端主程序
-提供小说润色的Web API服务
+提供字见润新的Web API服务
 """
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent.parent / "app"))
 
-from api_client import AIClient, AIError
+from api_client import AIClient, AIError, truncate_context
 from config_manager import ConfigManager
 from text_processor import TextProcessor
 from preset_styles import get_preset_styles, get_combined_prompt
@@ -28,8 +28,8 @@ logger = logging.getLogger(__name__)
 
 # 创建FastAPI应用
 app = FastAPI(
-    title="小说润色Web API",
-    description="基于AI的小说润色服务",
+    title="字见润新Web API",
+    description="基于AI的文本润色服务",
     version="1.0.0"
 )
 
@@ -125,7 +125,7 @@ class OptimizePromptResponse(BaseModel):
 async def root():
     """API根路径"""
     return {
-        "message": "小说润色Web API",
+        "message": "字见润新Web API",
         "version": "1.0.0",
         "endpoints": {
             "polish": "/api/polish",
@@ -212,12 +212,16 @@ async def predict_plot(request: PredictRequest):
         
         logger.info("收到剧情预测请求")
         
+        # 截取上下文：最多1000字，保持句子完整
+        context_text = truncate_context(request.full_text, max_chars=1000)
+        logger.info(f"原文长度: {len(request.full_text)}, 截取后长度: {len(context_text)}")
+        
         # 为每个请求创建独立的AI客户端实例，避免并发问题
         client = AIClient(config_manager=config_manager)
         
-        # 调用AI预测，传递风格提示词
+        # 调用AI预测，传递截取后的上下文和风格提示词
         predicted_text = client.predict_plot_continuation(
-            request.full_text,
+            context_text,
             style_prompt=request.style_prompt or ""
         )
         
@@ -509,12 +513,16 @@ async def websocket_polish(websocket: WebSocket):
                         "message": "正在预测剧情..."
                     }, websocket)
                     
+                    # 截取上下文：最多1000字，保持句子完整
+                    context_text = truncate_context(full_text, max_chars=1000)
+                    logger.info(f"WebSocket预测 - 原文长度: {len(full_text)}, 截取后长度: {len(context_text)}")
+                    
                     # 为每个请求创建独立的AI客户端实例，避免并发问题
                     client = AIClient(config_manager=config_manager)
                     
-                    # 调用AI预测，传递风格提示词
+                    # 调用AI预测，传递截取后的上下文和风格提示词
                     predicted_text = client.predict_plot_continuation(
-                        full_text,
+                        context_text,
                         style_prompt=style_prompt
                     )
                     # 解析预测的两行内容

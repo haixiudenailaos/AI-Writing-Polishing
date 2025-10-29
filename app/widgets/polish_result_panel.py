@@ -6,9 +6,10 @@
 """
 
 from typing import Dict, Optional, Callable, List
-from PyQt5 import QtCore, QtGui, QtWidgets
-from PyQt5.QtCore import pyqtSignal, QTimer
+from PySide6 import QtCore, QtGui, QtWidgets
+from PySide6.QtCore import Signal, QTimer
 from dataclasses import dataclass
+from app.widgets.design_system import Spacing, BorderRadius, Typography
 
 
 @dataclass
@@ -31,9 +32,9 @@ class PolishResultPanel(QtWidgets.QWidget):
     """润色结果面板 - 累积显示多个润色结果并提供编辑和操作功能"""
     
     # 信号定义
-    acceptResult = pyqtSignal()  # TAB键一键覆盖信号
-    rejectResult = pyqtSignal()  # ~键一键拒绝信号
-    resultEdited = pyqtSignal(str)  # 结果编辑信号
+    acceptResult = Signal()  # TAB键一键覆盖信号
+    rejectResult = Signal()  # ~键一键拒绝信号
+    resultEdited = Signal(str)  # 结果编辑信号
     
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
@@ -79,13 +80,13 @@ class PolishResultPanel(QtWidgets.QWidget):
         
         layout.addWidget(self._result_editor)
         
-        # 设置面板样式
-        self.setStyleSheet("""
-            QWidget#PolishResultPanel {
+        # 设置面板样式（初始样式，会被主题更新覆盖）
+        self.setStyleSheet(f"""
+            QWidget#PolishResultPanel {{
                 background-color: #2d2d30;
                 border: 1px solid #3e3e42;
-                border-radius: 4px;
-            }
+                border-radius: {BorderRadius.LG}px;
+            }}
         """)
     
     def _connect_signals(self) -> None:
@@ -113,9 +114,7 @@ class PolishResultPanel(QtWidgets.QWidget):
         
         # 检查是否已存在相同行号的润色结果，如果存在则删除旧的
         if line_number >= 0:
-            # 查找并删除相同行号的旧结果
             old_result_indices = [i for i, item in enumerate(self._result_items) if item.line_number == line_number]
-            # 从后往前删除，避免索引错位
             for idx in reversed(old_result_indices):
                 self._result_items.pop(idx)
         
@@ -128,18 +127,18 @@ class PolishResultPanel(QtWidgets.QWidget):
             is_prediction=is_prediction
         )
         
-        # 添加到队列
         self._result_items.append(result_item)
-        
-        # 更新显示
         self._refresh_display()
         
-        # 显示面板
-        if not self._is_visible:
-            self._is_visible = True
+        # 确保面板可见
+        if not self.isVisible():
             self.show()
+            self._is_visible = True
         
-        # 自动选中最新添加的结果
+        # 确保面板有最小高度
+        if self.height() < 100:
+            self.setMinimumHeight(150)
+        
         self._select_result(len(self._result_items) - 1)
     
     def _refresh_display(self) -> None:
@@ -315,13 +314,39 @@ class PolishResultPanel(QtWidgets.QWidget):
         """获取累积的润色结果数量"""
         return len(self._result_items)
     
+    def has_prediction_results(self) -> bool:
+        """检查是否有预测类型的结果"""
+        return any(item.is_prediction for item in self._result_items)
+    
+    def remove_all_predictions(self) -> None:
+        """移除所有预测类型的结果（当用户继续输入时调用）"""
+        if not self._result_items:
+            return
+        
+        # 过滤掉所有预测类型的结果
+        prediction_count = sum(1 for item in self._result_items if item.is_prediction)
+        if prediction_count == 0:
+            return
+        
+        self._result_items = [item for item in self._result_items if not item.is_prediction]
+        
+        # 刷新显示
+        if len(self._result_items) == 0:
+            self.hide_result()
+        else:
+            self._refresh_display()
+            if self._current_selected_index >= len(self._result_items):
+                self._current_selected_index = len(self._result_items) - 1
+            if self._current_selected_index >= 0:
+                self._select_result(self._current_selected_index)
+    
     def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
         """处理键盘事件"""
         if event.key() == QtCore.Qt.Key_Tab and event.modifiers() == QtCore.Qt.NoModifier:
             self.acceptResult.emit()
             event.accept()
             return
-        elif event.key() in (QtCore.Qt.Key_QuoteLeft, QtCore.Qt.Key_AsciiTilde) and event.modifiers() == QtCore.Qt.NoModifier:
+        elif event.key() in (QtCore.Qt.Key_QuoteLeft, QtCore.Qt.Key_AsciiTilde) and event.modifiers() in (QtCore.Qt.NoModifier, QtCore.Qt.ShiftModifier):
             self.rejectResult.emit()
             event.accept()
             return
@@ -346,6 +371,7 @@ class PolishResultPanel(QtWidgets.QWidget):
         # 面板背景色
         panel_bg = theme.get('panelBackground', '#2d2d30')
         border_color = theme.get('borderColor', '#3e3e42')
+        border_light = theme.get('borderLight', border_color)
         
         # 编辑器颜色
         editor_bg = theme.get('editorBackground', '#1e1e1e')
@@ -353,18 +379,23 @@ class PolishResultPanel(QtWidgets.QWidget):
         
         panel_stylesheet = f"""
             QWidget#PolishResultPanel {{
-                background-color: {panel_bg};
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 {theme.get('panelGradientStart', panel_bg)},
+                    stop:1 {theme.get('panelGradientEnd', panel_bg)});
                 border: 1px solid {border_color};
-                border-radius: 6px;
+                border-radius: {BorderRadius.LG}px;
             }}
             
             QPlainTextEdit#ResultEditor {{
                 background-color: {editor_bg};
                 color: {editor_fg};
-                border: none;
-                border-radius: 4px;
-                padding: 0px;
+                border: 1px solid {border_light};
+                border-radius: {BorderRadius.LG}px;
+                padding: {Spacing.MD}px;
                 selection-background-color: {theme.get('selection', '#264f78')};
+                selection-color: #ffffff;
+                font-size: {Typography.FontSize.BASE}px;
+                line-height: 1.6;
             }}
         """
         

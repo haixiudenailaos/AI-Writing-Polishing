@@ -1,7 +1,7 @@
 {
   "name": "novel-polish-web",
   "version": "1.0.0",
-  "description": "小说润色Web应用 - VSCode风格界面",
+  "description": "字见润新Web应用 - VSCode风格界面",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

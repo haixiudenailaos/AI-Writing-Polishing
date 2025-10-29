@@ -7,32 +7,64 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from typing import Any, Dict, Optional
 from pathlib import Path
+
+
+def _is_packaged() -> bool:
+    """检测是否运行在打包环境中（PyInstaller）"""
+    return getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS')
+
+
+def _get_default_config_dir() -> Path:
+    """获取默认配置目录路径
+    
+    - 开发环境：使用项目根目录的 app_data
+    - 打包环境：使用用户数据目录（Windows: %APPDATA%/GuojiRunse）
+    """
+    if _is_packaged():
+        # 打包环境 - 使用用户数据目录
+        if os.name == 'nt':  # Windows
+            app_data = os.environ.get('APPDATA')
+            if app_data:
+                return Path(app_data) / "GuojiRunse"
+        # 非 Windows 系统（Linux/Mac）
+        home = Path.home()
+        return home / ".guojirunse"
+    else:
+        # 开发环境 - 使用项目根目录的 app_data
+        project_root = Path(__file__).parent.parent
+        return project_root / "app_data"
 
 
 class SettingsStorage:
     """设置文件存储管理器
     
     使用JSON格式存储应用配置，包括API密钥、润色风格等敏感信息。
+    支持开发环境和打包环境的不同配置路径。
     """
     
     def __init__(self, config_dir: Optional[str] = None) -> None:
         """初始化设置存储
         
         Args:
-            config_dir: 配置目录路径，默认为 app_data
+            config_dir: 配置目录路径，如果为 None 则自动选择合适的目录
+                        - 开发环境：项目根目录/app_data
+                        - 打包环境：用户数据目录
         """
         if config_dir is None:
-            # 默认使用项目根目录下的 app_data 文件夹
-            project_root = Path(__file__).parent.parent
-            config_dir = project_root / "app_data"
+            config_dir = _get_default_config_dir()
         
         self.config_dir = Path(config_dir)
         self.config_file = self.config_dir / "app_config.json"
         
         # 确保配置目录存在
         self.config_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 打印配置路径（用于调试）
+        print(f"[INFO] 配置文件路径: {self.config_file}")
+        print(f"[INFO] 运行环境: {'打包环境' if _is_packaged() else '开发环境'}")
     
     def read(self) -> Dict[str, Any]:
         """读取配置文件

@@ -1,7 +1,7 @@
 <template>
   <div class="header-bar">
     <div class="header-left">
-      <h1 class="title">小说润色</h1>
+      <h1 class="title">字见润新</h1>
       <select 
         class="theme-selector"
         :value="theme"
@@ -24,8 +24,8 @@
     <div v-if="showAbout" class="modal-overlay" @click="showAbout = false">
       <div class="modal-content" @click.stop>
         <h2>关于</h2>
-        <p>小说润色Web应用 v1.0.0</p>
-        <p>基于AI的智能小说润色工具</p>
+        <p>字见润新Web应用 v1.0.0</p>
+        <p>基于AI的智能文本润色工具</p>
         <p>VSCode风格界面设计</p>
         <button @click="showAbout = false">关闭</button>
       </div>

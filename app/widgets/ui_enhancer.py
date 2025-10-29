@@ -4,8 +4,8 @@ UI增强模块
 """
 
 from typing import Dict, Optional, List
-from PyQt5 import QtCore, QtGui, QtWidgets
-from PyQt5.QtCore import QPropertyAnimation, QEasingCurve, pyqtSignal
+from PySide6 import QtCore, QtGui, QtWidgets
+from PySide6.QtCore import QPropertyAnimation, QEasingCurve, Signal
 
 
 class UnderlineRenderer(QtCore.QObject):
@@ -88,7 +88,7 @@ class UnderlineRenderer(QtCore.QObject):
 class AnimationManager(QtCore.QObject):
     """动画管理器 - 管理UI过渡动画效果"""
     
-    animationFinished = pyqtSignal(str)  # 动画完成信号
+    animationFinished = Signal(str)  # 动画完成信号
     
     def __init__(self, parent: Optional[QtCore.QObject] = None) -> None:
         super().__init__(parent)

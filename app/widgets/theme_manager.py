@@ -2,7 +2,7 @@ import json
 import os
 from typing import Dict, Iterable, Tuple
 
-from PyQt5 import QtCore
+from PySide6 import QtCore
 
 THEME_CATALOG: Dict[str, Dict[str, str]] = {
     "dark": {
@@ -16,12 +16,15 @@ THEME_CATALOG: Dict[str, Dict[str, str]] = {
         "selection": "#264f78",
         "accent": "#0e639c",
         "panelBackground": "#252526",
+        "panelGradientStart": "#2a2a2d",
+        "panelGradientEnd": "#252526",
         "outputForeground": "#ffffff",
         "originalBackground": "#5a1f1a",
         "polishedBackground": "#094124",
         "buttonBackground": "#3a3d41",
         "buttonForeground": "#ffffff",
         "borderColor": "#3c3c3c",
+        "borderLight": "#4a4a4a",
         "overlayBackground": "rgba(0, 0, 0, 0.72)",
         "mutedForeground": "#9c9c9c",
         "titleBarBackground": "#2d2d30",
@@ -48,12 +51,15 @@ THEME_CATALOG: Dict[str, Dict[str, str]] = {
         "selection": "#add6ff",
         "accent": "#0e639c",
         "panelBackground": "#f3f3f3",
+        "panelGradientStart": "#fafafa",
+        "panelGradientEnd": "#f3f3f3",
         "outputForeground": "#000000",
         "originalBackground": "#ffe4e1",
         "polishedBackground": "#e5f7ef",
         "buttonBackground": "#e1e4e8",
         "buttonForeground": "#000000",
         "borderColor": "#d4d4d4",
+        "borderLight": "#e2e2e2",
         "overlayBackground": "rgba(255, 255, 255, 0.72)",
         "mutedForeground": "#707070",
         "titleBarBackground": "#f3f3f3",
@@ -80,12 +86,15 @@ THEME_CATALOG: Dict[str, Dict[str, str]] = {
         "selection": "#144f71",
         "accent": "#0db9d7",
         "panelBackground": "#012840",
+        "panelGradientStart": "#013148",
+        "panelGradientEnd": "#012840",
         "outputForeground": "#ffffff",
         "originalBackground": "#3b1e35",
         "polishedBackground": "#0b3d31",
         "buttonBackground": "#024d63",
         "buttonForeground": "#ffffff",
         "borderColor": "#02526f",
+        "borderLight": "#046082",
         "overlayBackground": "rgba(1, 22, 39, 0.82)",
         "mutedForeground": "#6fb7c7",
         "titleBarBackground": "#012840",
@@ -112,12 +121,15 @@ THEME_CATALOG: Dict[str, Dict[str, str]] = {
         "selection": "#b7d8c7",
         "accent": "#2f7a5f",
         "panelBackground": "#ddefe3",
+        "panelGradientStart": "#e0efe6",
+        "panelGradientEnd": "#ddefe3",
         "outputForeground": "#0b1f10",
         "originalBackground": "#f6efe8",
         "polishedBackground": "#d8f2de",
         "buttonBackground": "#d0e9d6",
         "buttonForeground": "#0b1f10",
         "borderColor": "#bcd6c5",
+        "borderLight": "#cde1d5",
         "overlayBackground": "rgba(231, 244, 234, 0.72)",
         "mutedForeground": "#5f7b68",
         "titleBarBackground": "#ddefe3",
@@ -143,7 +155,7 @@ def _default_settings_path() -> str:
 
 
 class ThemeManager(QtCore.QObject):
-    themeChanged = QtCore.pyqtSignal(dict)
+    themeChanged = QtCore.Signal(dict)
 
     def __init__(self, settingsFilePath: str | None = None) -> None:
         super().__init__()

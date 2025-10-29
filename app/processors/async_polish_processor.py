@@ -3,8 +3,8 @@
 实现非阻塞的后台润色处理逻辑，保持用户输入流畅性
 """
 
-from PyQt5.QtCore import QObject, QThread, QTimer, pyqtSignal
-from PyQt5.QtWidgets import QApplication
+from PySide6.QtCore import QObject, QThread, QTimer, Signal
+from PySide6.QtWidgets import QApplication
 import time
 import logging
 from typing import Optional, Callable, Dict, Any
@@ -27,10 +27,10 @@ class AsyncPolishWorker(QObject):
     """异步润色工作线程"""
     
     # 信号定义
-    polish_started = pyqtSignal(str)  # request_id
-    polish_progress = pyqtSignal(str, str)  # request_id, progress_message
-    polish_completed = pyqtSignal(str, str)  # request_id, result
-    polish_failed = pyqtSignal(str, str)  # request_id, error_message
+    polish_started = Signal(str)  # request_id
+    polish_progress = Signal(str, str)  # request_id, progress_message
+    polish_completed = Signal(str, str)  # request_id, result
+    polish_failed = Signal(str, str)  # request_id, error_message
     
     def __init__(self, ai_client, parent=None):
         super().__init__(parent)
@@ -109,10 +109,10 @@ class AsyncPolishProcessor(QObject):
     """异步润色处理器主类"""
     
     # 信号定义
-    polish_started = pyqtSignal(str)  # request_id
-    polish_progress = pyqtSignal(str, str)  # request_id, progress_message
-    polish_completed = pyqtSignal(str, str)  # request_id, result
-    polish_failed = pyqtSignal(str, str)  # request_id, error_message
+    polish_started = Signal(str)  # request_id
+    polish_progress = Signal(str, str)  # request_id, progress_message
+    polish_completed = Signal(str, str)  # request_id, result
+    polish_failed = Signal(str, str)  # request_id, error_message
     
     def __init__(self, ai_client, parent=None):
         super().__init__(parent)
@@ -255,9 +255,9 @@ class HeartbeatManager(QObject):
     """心跳管理器 - 保持API连接稳定"""
     
     # 信号定义
-    heartbeat_sent = pyqtSignal()
-    heartbeat_failed = pyqtSignal(str)  # error_message
-    connection_status_changed = pyqtSignal(bool)  # is_connected
+    heartbeat_sent = Signal()
+    heartbeat_failed = Signal(str)  # error_message
+    connection_status_changed = Signal(bool)  # is_connected
     
     def __init__(self, ai_client, interval_seconds: int = 30, parent=None):
         super().__init__(parent)
@@ -272,13 +272,17 @@ class HeartbeatManager(QObject):
         self.heartbeat_timer.timeout.connect(self._send_heartbeat)
         self.heartbeat_timer.setInterval(interval_seconds * 1000)  # 转换为毫秒
         
-        # 启动心跳
+        # 【性能优化】不在初始化时立即启动心跳
+        # 而是等待主窗口调用force_reconnect来执行首次检查
+        # 这样可以与API预热配合，避免重复的连接测试
+        # 启动心跳定时器（但首次检查由外部触发）
         self.start()
     
     def start(self):
-        """启动心跳"""
+        """启动心跳定时器"""
         self.heartbeat_timer.start()
         logging.info(f"心跳管理器已启动，间隔: {self.interval_seconds}秒")
+        logging.info(f"提示：首次心跳检查将在{self.interval_seconds}秒后自动执行，或调用force_reconnect()立即执行")
     
     def stop(self):
         """停止心跳"""
@@ -286,35 +290,34 @@ class HeartbeatManager(QObject):
         logging.info("心跳管理器已停止")
     
     def _send_heartbeat(self):
-        """发送心跳"""
+        """轻量级心跳 - 只检查连接池状态，不发送真实请求"""
         try:
-            if self.ai_client and hasattr(self.ai_client, 'test_connection'):
-                # 测试连接
-                success = self.ai_client.test_connection()
+            # 始终使用轻量级检查（不发送HTTP请求）
+            if self.ai_client and hasattr(self.ai_client, 'check_connection_alive'):
+                is_alive = self.ai_client.check_connection_alive()
                 
-                if success:
+                if is_alive:
+                    # 连接池存在，认为连接正常
                     self.consecutive_failures = 0
                     if not self.is_connected:
                         self.is_connected = True
                         self.connection_status_changed.emit(True)
+                        logging.info("API连接已建立")
                     self.heartbeat_sent.emit()
                 else:
-                    self._handle_heartbeat_failure("连接测试失败")
+                    # 连接池不存在，标记可能断开
+                    self._handle_heartbeat_failure("连接池未就绪")
             else:
-                # 如果AI客户端没有test_connection方法，尝试发送一个简单的请求
-                try:
-                    # 发送一个简单的测试请求
-                    test_result = self.ai_client.polish_text("test")
-                    self.consecutive_failures = 0
-                    if not self.is_connected:
-                        self.is_connected = True
-                        self.connection_status_changed.emit(True)
-                    self.heartbeat_sent.emit()
-                except Exception as e:
-                    self._handle_heartbeat_failure(f"心跳测试失败: {str(e)}")
+                # 如果没有轻量级检查方法，假设连接正常
+                # （避免发送实际请求浪费资源）
+                self.consecutive_failures = 0
+                if not self.is_connected:
+                    self.is_connected = True
+                    self.connection_status_changed.emit(True)
+                self.heartbeat_sent.emit()
                     
         except Exception as e:
-            self._handle_heartbeat_failure(f"心跳发送异常: {str(e)}")
+            self._handle_heartbeat_failure(f"心跳检查异常: {str(e)}")
     
     def _handle_heartbeat_failure(self, error_message: str):
         """处理心跳失败"""
@@ -330,7 +333,14 @@ class HeartbeatManager(QObject):
         self.heartbeat_failed.emit(error_message)
     
     def force_reconnect(self):
-        """强制重连"""
+        """强制重连 - 立即执行一次心跳检查
+        
+        该方法通常在以下情况调用：
+        1. 程序启动时，配合API预热
+        2. 用户手动触发重连
+        3. 检测到连接断开后尝试恢复
+        """
+        logging.info("强制执行心跳检查...")
         self.consecutive_failures = 0
         self._send_heartbeat()
     

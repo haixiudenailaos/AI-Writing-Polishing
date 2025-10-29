@@ -4,11 +4,12 @@ VSCode风格的设置对话框
 """
 
 from typing import Dict, List, Optional, Any
-from PyQt5 import QtWidgets, QtCore, QtGui
-from config_manager import ConfigManager, PolishStyle, APIConfig
-from style_manager import StyleManager
-from api_client import AIClient
-from config_migration import ConfigMigration
+from PySide6 import QtWidgets, QtCore, QtGui
+from app.config_manager import ConfigManager, PolishStyle, APIConfig
+from app.style_manager import StyleManager
+from app.api_client import AIClient
+from app.config_migration import ConfigMigration
+from app.widgets.design_system import Spacing, BorderRadius, Typography, Elevation, Animation
 
 
 class ElidedLabel(QtWidgets.QLabel):
@@ -87,14 +88,13 @@ class ElidedLabel(QtWidgets.QLabel):
         """
         
         self.setStyleSheet(style_sheet)
-        self.update()
 
 
 class SettingsDialog(QtWidgets.QDialog):
     """VSCode风格的设置对话框"""
     
     # 信号定义
-    configChanged = QtCore.pyqtSignal()
+    configChanged = QtCore.Signal()
     
     def __init__(self, config_manager: ConfigManager, style_manager: StyleManager, parent=None):
         super().__init__(parent)
@@ -102,6 +102,8 @@ class SettingsDialog(QtWidgets.QDialog):
         self.style_manager = style_manager
         self.migration = ConfigMigration(config_manager)
         self._current_theme = {}
+        self._stack_opacity_effect = None
+        self._stack_fade_anim = None
         
         self.setWindowTitle("设置")
         self.setModal(True)
@@ -115,6 +117,9 @@ class SettingsDialog(QtWidgets.QDialog):
         
         # 应用主题
         self._apply_theme()
+        # 阴影与动画
+        self._apply_elevation()
+        self._init_stack_animation()
     
     def _setup_ui(self):
         """设置UI布局"""
@@ -141,6 +146,16 @@ class SettingsDialog(QtWidgets.QDialog):
         
         # 创建底部按钮栏
         self._create_button_bar(layout)
+    
+    def _apply_elevation(self):
+        """为侧边栏与堆叠页添加阴影层级"""
+        try:
+            if hasattr(self, 'settings_stack') and self.settings_stack:
+                Elevation.apply_shadow(self.settings_stack, blur_radius=18, offset_x=0, offset_y=2, color=QtGui.QColor(0, 0, 0, 60))
+            if hasattr(self, '_sidebar') and self._sidebar:
+                Elevation.apply_shadow(self._sidebar, blur_radius=12, offset_x=0, offset_y=1, color=QtGui.QColor(0, 0, 0, 36))
+        except Exception:
+            pass
     
     def _create_title_bar(self, parent_layout):
         """创建标题栏"""
@@ -206,6 +221,7 @@ class SettingsDialog(QtWidgets.QDialog):
         sidebar_layout.addStretch()
         
         parent_layout.addWidget(sidebar)
+        self._sidebar = sidebar
     
     def _create_settings_panel(self, parent_layout):
         """创建设置面板"""
@@ -257,8 +273,20 @@ class SettingsDialog(QtWidgets.QDialog):
         show_key_button.setMinimumSize(40, 26)
         show_key_button.clicked.connect(self._toggle_api_key_visibility)
         
+        # 粘贴密钥按钮与状态指示
+        paste_key_button = QtWidgets.QPushButton("粘贴")
+        paste_key_button.setObjectName("PasteKeyButton")
+        paste_key_button.setMinimumSize(40, 26)
+        paste_key_button.clicked.connect(lambda: self._paste_from_clipboard(self.api_key_input))
+        self.api_key_status = QtWidgets.QLabel("")
+        self.api_key_status.setObjectName("APIKeyStatus")
+        self.api_key_status.setMinimumWidth(18)
+        self.api_key_input.textChanged.connect(self._update_key_status)
+        
         key_layout = QtWidgets.QHBoxLayout()
         key_layout.addWidget(self.api_key_input)
+        key_layout.addWidget(self.api_key_status)
+        key_layout.addWidget(paste_key_button)
         key_layout.addWidget(show_key_button)
         
         api_key_group.layout().addLayout(key_layout)
@@ -275,25 +303,88 @@ class SettingsDialog(QtWidgets.QDialog):
         layout.addWidget(base_url_group)
         
         # 模型
-        model_group = self._create_form_group("模型", "选择或输入AI模型名称")
+        model_group = self._create_form_group("模型", "选择AI模型（仅支持以下两个模型）")
         self.model_input = QtWidgets.QComboBox()
         self.model_input.setObjectName("ModelInput")
-        self.model_input.setEditable(True)
-        # 再次缩小：22 -> 20
-        self.model_input.setMinimumHeight(20)
+        self.model_input.setEditable(False)  # 改为不可编辑，只能选择预设模型
+        # 优化高度，提供更好的视觉效果
+        self.model_input.setMinimumHeight(26)
         
-        # 预设模型列表
+        # 仅支持的两个模型
         models = [
-            "deepseek-ai/deepseek-llm-67b-instruct",
-            "Qwen/Qwen2.5-72B-Instruct",
-            "meta-llama/Meta-Llama-3.1-70B-Instruct",
-            "gpt-3.5-turbo",
-            "gpt-4",
-            "claude-3-sonnet"
+            "deepseek-ai/DeepSeek-V3.2-Exp",
+            "deepseek-ai/DeepSeek-V3"
         ]
         self.model_input.addItems(models)
+        
+        # 添加提示标签
+        model_hint = QtWidgets.QLabel("💡 当前仅支持 DeepSeek-V3.2-Exp 和 DeepSeek-V3 模型")
+        model_hint.setObjectName("ModelHint")
+        model_hint.setStyleSheet("color: #4ba6df; font-size: 11px; margin-top: 4px;")
+        model_hint.setWordWrap(True)
+        
         model_group.layout().addWidget(self.model_input)
+        model_group.layout().addWidget(model_hint)
         layout.addWidget(model_group)
+        
+        # 向量化API配置
+        embedding_group = self._create_form_group("向量化API配置", "用于知识库创建的阿里云向量化服务")
+        
+        # 阿里云API密钥
+        embedding_key_label = QtWidgets.QLabel("阿里云API密钥:")
+        self.embedding_key_input = QtWidgets.QLineEdit()
+        self.embedding_key_input.setObjectName("EmbeddingKeyInput")
+        self.embedding_key_input.setEchoMode(QtWidgets.QLineEdit.Password)
+        self.embedding_key_input.setPlaceholderText("sk-...")
+        self.embedding_key_input.setMinimumHeight(20)
+        
+        # 显示/隐藏密钥按钮
+        show_embedding_key_button = QtWidgets.QPushButton("显示")
+        show_embedding_key_button.setObjectName("ShowEmbeddingKeyButton")
+        show_embedding_key_button.setCheckable(True)
+        show_embedding_key_button.setMinimumSize(40, 26)
+        show_embedding_key_button.clicked.connect(self._toggle_embedding_key_visibility)
+        
+        # 粘贴按钮与状态
+        paste_embedding_key_button = QtWidgets.QPushButton("粘贴")
+        paste_embedding_key_button.setObjectName("PasteEmbeddingKeyButton")
+        paste_embedding_key_button.setMinimumSize(40, 26)
+        paste_embedding_key_button.clicked.connect(lambda: self._paste_from_clipboard(self.embedding_key_input))
+        self.embedding_key_status = QtWidgets.QLabel("")
+        self.embedding_key_status.setObjectName("EmbeddingKeyStatus")
+        self.embedding_key_status.setMinimumWidth(18)
+        self.embedding_key_input.textChanged.connect(self._update_key_status)
+        
+        embedding_key_layout = QtWidgets.QHBoxLayout()
+        embedding_key_layout.addWidget(self.embedding_key_input)
+        embedding_key_layout.addWidget(self.embedding_key_status)
+        embedding_key_layout.addWidget(paste_embedding_key_button)
+        embedding_key_layout.addWidget(show_embedding_key_button)
+        
+        embedding_group.layout().addWidget(embedding_key_label)
+        embedding_group.layout().addLayout(embedding_key_layout)
+        
+        # 向量模型
+        embedding_model_label = QtWidgets.QLabel("向量模型:")
+        self.embedding_model_input = QtWidgets.QComboBox()
+        self.embedding_model_input.setObjectName("EmbeddingModelInput")
+        self.embedding_model_input.setEditable(True)
+        self.embedding_model_input.setMinimumHeight(20)
+        self.embedding_model_input.addItems(["text-embedding-v4", "text-embedding-v3", "text-embedding-v2"])
+        
+        embedding_group.layout().addWidget(embedding_model_label)
+        embedding_group.layout().addWidget(self.embedding_model_input)
+        
+        # 帮助链接
+        help_label = QtWidgets.QLabel(
+            '<a href="https://bailian.console.aliyun.com/#/model-market/detail/text-embedding-v4" '
+            'style="color: #007acc;">查看阿里云向量化模型文档</a>'
+        )
+        help_label.setOpenExternalLinks(True)
+        help_label.setTextFormat(QtCore.Qt.RichText)
+        embedding_group.layout().addWidget(help_label)
+        
+        layout.addWidget(embedding_group)
         
         # 测试连接按钮
         test_layout = QtWidgets.QHBoxLayout()
@@ -537,6 +628,22 @@ class SettingsDialog(QtWidgets.QDialog):
         button_layout = QtWidgets.QHBoxLayout(button_bar)
         # 优化间距：提供更好的视觉效果
         button_layout.setContentsMargins(20, 8, 20, 8)
+        # 作者信息：直接展示邮箱 + 复制按钮（不自动跳转）
+        author_email_label = QtWidgets.QLabel("作者邮箱：996043050@qq.com")
+        author_email_label.setObjectName("AuthorEmailLabel")
+        author_email_label.setMinimumHeight(32)
+        button_layout.addWidget(author_email_label)
+
+        button_layout.addSpacing(8)
+
+        author_copy_button = QtWidgets.QPushButton("复制")
+        author_copy_button.setObjectName("AuthorCopyButton")
+        author_copy_button.setMinimumSize(60, 32)
+        author_copy_button.setMaximumSize(80, 32)
+        author_copy_button.setCursor(QtGui.QCursor(QtCore.Qt.PointingHandCursor))
+        author_copy_button.setToolTip("复制邮箱到剪贴板")
+        author_copy_button.clicked.connect(self._copy_author_email)
+        button_layout.addWidget(author_copy_button)
         
         button_layout.addStretch()
         
@@ -575,14 +682,68 @@ class SettingsDialog(QtWidgets.QDialog):
         
         parent_layout.addWidget(button_bar)
     
+    def _copy_author_email(self) -> None:
+        """复制作者邮箱到剪贴板并提示。"""
+        email = "996043050@qq.com"
+        clipboard = QtWidgets.QApplication.clipboard()
+        if clipboard:
+            clipboard.setText(email)
+        QtWidgets.QMessageBox.information(self, "复制成功", f"邮箱已复制：{email}")
+
     def _connect_signals(self):
         """连接信号"""
-        self.settings_list.currentRowChanged.connect(self.settings_stack.setCurrentIndex)
+        self.settings_list.currentRowChanged.connect(self._on_settings_section_changed)
         
         # API配置变化信号
         self.api_key_input.textChanged.connect(self._on_config_changed)
         self.base_url_input.textChanged.connect(self._on_config_changed)
         self.model_input.currentTextChanged.connect(self._on_config_changed)
+
+    def _init_stack_animation(self):
+        """初始化堆叠页淡入淡出动画"""
+        try:
+            effect = QtWidgets.QGraphicsOpacityEffect(self.settings_stack)
+            effect.setOpacity(1.0)
+            self.settings_stack.setGraphicsEffect(effect)
+            self._stack_opacity_effect = effect
+            anim = QtCore.QPropertyAnimation(effect, b"opacity", self)
+            anim.setDuration(Animation.Duration.FAST)
+            anim.setEasingCurve(Animation.Easing.GENTLE)
+            self._stack_fade_anim = anim
+        except Exception:
+            self._stack_opacity_effect = None
+            self._stack_fade_anim = None
+
+    def _on_settings_section_changed(self, index: int) -> None:
+        """切换设置页时的淡入淡出动效"""
+        if not self._stack_opacity_effect or not self._stack_fade_anim:
+            self.settings_stack.setCurrentIndex(index)
+            return
+        if index == self.settings_stack.currentIndex():
+            return
+
+        def handle_fade_out_finished() -> None:
+            try:
+                self._stack_fade_anim.finished.disconnect(handle_fade_out_finished)
+            except Exception:
+                pass
+            self.settings_stack.setCurrentIndex(index)
+            # 淡入
+            self._stack_fade_anim.stop()
+            self._stack_fade_anim.setStartValue(0.0)
+            self._stack_fade_anim.setEndValue(1.0)
+            self._stack_fade_anim.start()
+
+        # 淡出
+        try:
+            self._stack_fade_anim.finished.disconnect()
+        except Exception:
+            pass
+        self._stack_fade_anim.stop()
+        self._stack_fade_anim.setStartValue(1.0)
+        self._stack_fade_anim.setEndValue(0.0)
+        self._stack_fade_anim.finished.connect(handle_fade_out_finished)
+        self._stack_fade_anim.start()
     
     def _load_current_config(self):
         """加载当前配置"""
@@ -598,6 +759,15 @@ class SettingsDialog(QtWidgets.QDialog):
             self.model_input.setCurrentIndex(index)
         else:
             self.model_input.setCurrentText(model_text)
+        
+        # 加载向量化API配置
+        self.embedding_key_input.setText(api_config.embedding_api_key or "")
+        embedding_model_text = api_config.embedding_model or "text-embedding-v4"
+        embedding_index = self.embedding_model_input.findText(embedding_model_text)
+        if embedding_index >= 0:
+            self.embedding_model_input.setCurrentIndex(embedding_index)
+        else:
+            self.embedding_model_input.setCurrentText(embedding_model_text)
         
         # 加载风格配置
         self._load_style_config()
@@ -688,6 +858,15 @@ class SettingsDialog(QtWidgets.QDialog):
             self.api_key_input.setEchoMode(QtWidgets.QLineEdit.Password)
             self.sender().setText("显示")
     
+    def _toggle_embedding_key_visibility(self, checked: bool):
+        """切换向量化API密钥显示/隐藏"""
+        if checked:
+            self.embedding_key_input.setEchoMode(QtWidgets.QLineEdit.Normal)
+            self.sender().setText("隐藏")
+        else:
+            self.embedding_key_input.setEchoMode(QtWidgets.QLineEdit.Password)
+            self.sender().setText("显示")
+    
     def _test_api_connection(self):
         """测试API连接"""
         self.test_button.setEnabled(False)
@@ -728,10 +907,30 @@ class SettingsDialog(QtWidgets.QDialog):
         
         self.test_button.setEnabled(True)
     
+    def _paste_from_clipboard(self, line_edit: QtWidgets.QLineEdit) -> None:
+        """从剪贴板粘贴内容"""
+        clipboard = QtWidgets.QApplication.clipboard()
+        text = clipboard.text() if clipboard else ""
+        if text:
+            line_edit.setText(text.strip())
+
+    def _update_key_status(self) -> None:
+        """根据输入内容更新密钥状态指示"""
+        accent = self._current_theme.get('accent', '#007acc') if self._current_theme else '#007acc'
+        ok = f"<span style=\"color:{accent}\">✓</span>"
+        empty = ""
+        if hasattr(self, 'api_key_input') and hasattr(self, 'api_key_status'):
+            self.api_key_status.setText(ok if self.api_key_input.text().strip() else empty)
+        if hasattr(self, 'embedding_key_input') and hasattr(self, 'embedding_key_status'):
+            self.embedding_key_status.setText(ok if self.embedding_key_input.text().strip() else empty)
+        self.update()
+
     def _on_config_changed(self):
         """配置变化回调"""
         # 清除测试状态
         self.test_status_label.setText("")
+        # 更新密钥状态指示
+        self._update_key_status()
     
     def _on_style_selection_changed(self):
         """风格选择变化回调"""
@@ -779,7 +978,7 @@ class SettingsDialog(QtWidgets.QDialog):
         if hasattr(dialog, 'prompt_preview') and self._current_theme:
             dialog.prompt_preview.set_theme(self._current_theme)
         
-        if dialog.exec_() == QtWidgets.QDialog.Accepted:
+        if dialog.exec() == QtWidgets.QDialog.Accepted:
             style_data = dialog.get_style_data()
             style = PolishStyle(**style_data)
             
@@ -799,7 +998,7 @@ class SettingsDialog(QtWidgets.QDialog):
         if hasattr(dialog, 'prompt_preview') and self._current_theme:
             dialog.prompt_preview.set_theme(self._current_theme)
         
-        if dialog.exec_() == QtWidgets.QDialog.Accepted:
+        if dialog.exec() == QtWidgets.QDialog.Accepted:
             style_data = dialog.get_style_data()
             updated_style = PolishStyle(**style_data)
             
@@ -835,7 +1034,7 @@ class SettingsDialog(QtWidgets.QDialog):
     def _show_migration_dialog(self, migration_info: Dict[str, Any]):
         """显示迁移对话框"""
         dialog = MigrationDialog(migration_info, self.migration, parent=self)
-        if dialog.exec_() == QtWidgets.QDialog.Accepted:
+        if dialog.exec() == QtWidgets.QDialog.Accepted:
             # 迁移完成后重新加载配置
             self._load_current_config()
 
@@ -867,7 +1066,7 @@ class SettingsDialog(QtWidgets.QDialog):
             
             # 显示详细的迁移对话框
             dialog = MigrationDialog(migration_info, self.migration, parent=self)
-            if dialog.exec_() == QtWidgets.QDialog.Accepted:
+            if dialog.exec() == QtWidgets.QDialog.Accepted:
                 self._load_current_config()
                 
         except Exception as e:
@@ -934,7 +1133,9 @@ class SettingsDialog(QtWidgets.QDialog):
             self.config_manager.update_api_config(
                 api_key=self.api_key_input.text().strip(),
                 base_url=self.base_url_input.text().strip(),
-                model=self.model_input.currentText().strip()
+                model=self.model_input.currentText().strip(),
+                embedding_api_key=self.embedding_key_input.text().strip(),
+                embedding_model=self.embedding_model_input.currentText().strip()
             )
             
             # 保存风格选择
@@ -1011,6 +1212,11 @@ class SettingsDialog(QtWidgets.QDialog):
         #SettingsList::item:selected {{
             background-color: {self._current_theme.get('listActiveSelectionBackground', '#094771')};
             color: {self._current_theme.get('listActiveSelectionForeground', '#ffffff')};
+            border-left: 3px solid {self._current_theme.get('accent', '#007acc')};
+        }}
+        
+        #SettingsList::item:hover {{
+            background-color: {self._current_theme.get('listHoverBackground', '#2a2d2e')};
         }}
         
         #PanelTitle {{
@@ -1023,7 +1229,7 @@ class SettingsDialog(QtWidgets.QDialog):
         QGroupBox {{
             font-weight: bold;
             border: 1px solid {self._current_theme.get('borderColor', '#3e3e42')};
-            border-radius: 4px;
+            border-radius: {BorderRadius.MD}px;
             margin-top: 8px;
             padding-top: 8px;
             color: {self._current_theme.get('editorForeground', '#ffffff')};
@@ -1043,7 +1249,7 @@ class SettingsDialog(QtWidgets.QDialog):
         QLineEdit, QComboBox {{
             background-color: {self._current_theme.get('inputBackground', '#3c3c3c')};
             border: 1px solid {self._current_theme.get('inputBorder', '#5a5a5a')};
-            border-radius: 3px;
+            border-radius: {BorderRadius.SM}px;
             padding: 6px;
             color: {self._current_theme.get('inputForeground', '#ffffff')};
         }}
@@ -1055,7 +1261,7 @@ class SettingsDialog(QtWidgets.QDialog):
         QPushButton {{
             background-color: {self._current_theme.get('buttonBackground', '#0e639c')};
             border: 1px solid {self._current_theme.get('buttonBorder', '#0e639c')};
-            border-radius: 3px;
+            border-radius: {BorderRadius.SM}px;
             padding: 6px 12px;
             color: {self._current_theme.get('buttonForeground', '#ffffff')};
         }}
@@ -1097,22 +1303,51 @@ class SettingsDialog(QtWidgets.QDialog):
         
         QComboBox::drop-down {{
             border: none;
-            background-color: {self._current_theme.get('buttonBackground', '#0e639c')};
+            background-color: transparent;
+            width: 20px;
+            padding-right: 4px;
+        }}
+        
+        QComboBox::drop-down:hover {{
+            background-color: {self._current_theme.get('buttonHoverBackground', '#1177bb')};
         }}
         
         QComboBox::down-arrow {{
             image: none;
-            border-left: 4px solid transparent;
-            border-right: 4px solid transparent;
-            border-top: 4px solid {self._current_theme.get('buttonForeground', '#ffffff')};
-            margin: 0px;
+            border-left: 5px solid transparent;
+            border-right: 5px solid transparent;
+            border-top: 5px solid {self._current_theme.get('inputForeground', '#ffffff')};
+            margin-right: 4px;
+        }}
+        
+        QComboBox::down-arrow:hover {{
+            border-top: 5px solid {self._current_theme.get('focusBorder', '#007acc')};
         }}
         
         QComboBox QAbstractItemView {{
             background-color: {self._current_theme.get('inputBackground', '#3c3c3c')};
-            border: 1px solid {self._current_theme.get('inputBorder', '#5a5a5a')};
+            border: 1px solid {self._current_theme.get('focusBorder', '#007acc')};
+            border-radius: 3px;
             selection-background-color: {self._current_theme.get('listActiveSelectionBackground', '#094771')};
+            selection-color: {self._current_theme.get('listActiveSelectionForeground', '#ffffff')};
             color: {self._current_theme.get('inputForeground', '#ffffff')};
+            padding: 2px;
+            outline: none;
+        }}
+        
+        QComboBox QAbstractItemView::item {{
+            padding: 6px 12px;
+            border-radius: 2px;
+            min-height: 24px;
+        }}
+        
+        QComboBox QAbstractItemView::item:hover {{
+            background-color: {self._current_theme.get('listHoverBackground', '#2a2d2e')};
+        }}
+        
+        QComboBox QAbstractItemView::item:selected {{
+            background-color: {self._current_theme.get('listActiveSelectionBackground', '#094771')};
+            color: {self._current_theme.get('listActiveSelectionForeground', '#ffffff')};
         }}
         
         #SettingsCloseButton {{
@@ -1200,11 +1435,40 @@ class SettingsDialog(QtWidgets.QDialog):
             border-top: 1px solid {self._current_theme.get('borderColor', '#3e3e42')};
         }}
         
+        /* 作者信息（底部左侧） */
+        #AuthorEmailLabel {{
+            color: {self._current_theme.get('mutedForeground', '#9c9c9c')};
+            padding: 6px 8px;
+            border-radius: {BorderRadius.SM}px;
+            background-color: transparent;
+        }}
+
+        #AuthorCopyButton {{
+            background-color: transparent;
+            border: 1px solid {self._current_theme.get('accent', '#007acc')};
+            border-radius: {BorderRadius.SM}px;
+            padding: 6px 12px;
+            color: {self._current_theme.get('accent', '#007acc')};
+            font-weight: 500;
+        }}
+        
+        #AuthorCopyButton:hover {{
+            background-color: {self._current_theme.get('accent', '#007acc')};
+            color: #ffffff;
+            border-color: {self._current_theme.get('accent', '#007acc')};
+        }}
+        
+        #AuthorCopyButton:pressed {{
+            background-color: {self._current_theme.get('buttonActiveBackground', '#0d5a9a')};
+            color: #ffffff;
+            border-color: {self._current_theme.get('buttonActiveBackground', '#0d5a9a')};
+        }}
+        
         /* 底部按钮栏专用样式 */
         #CancelButton {{
             background-color: {self._current_theme.get('inputBackground', '#3c3c3c')};
             border: 1px solid {self._current_theme.get('inputBorder', '#5a5a5a')};
-            border-radius: 4px;
+            border-radius: {BorderRadius.SM}px;
             padding: 8px 16px;
             color: {self._current_theme.get('editorForeground', '#ffffff')};
             font-weight: 500;
@@ -1223,7 +1487,7 @@ class SettingsDialog(QtWidgets.QDialog):
         #ApplyButton {{
             background-color: {self._current_theme.get('buttonBackground', '#0e639c')};
             border: 1px solid {self._current_theme.get('buttonBorder', '#0e639c')};
-            border-radius: 4px;
+            border-radius: {BorderRadius.SM}px;
             padding: 8px 16px;
             color: {self._current_theme.get('buttonForeground', '#ffffff')};
             font-weight: 500;
@@ -1247,7 +1511,7 @@ class SettingsDialog(QtWidgets.QDialog):
         #OKButton {{
             background-color: #28a745;
             border: 1px solid #28a745;
-            border-radius: 4px;
+            border-radius: {BorderRadius.SM}px;
             padding: 8px 16px;
             color: #ffffff;
             font-weight: 500;
@@ -1268,9 +1532,17 @@ class SettingsDialog(QtWidgets.QDialog):
             color: {self._current_theme.get('mutedForeground', '#6c6c6c')};
             border-color: {self._current_theme.get('inputBorder', '#5a5a5a')};
         }}
+        
+        /* 密钥状态指示 */
+        #APIKeyStatus, #EmbeddingKeyStatus {{
+            color: {self._current_theme.get('accent', '#007acc')};
+            font-weight: bold;
+        }}
         """
         
         self.setStyleSheet(style_sheet)
+        # 同步一次状态指示（主题更新后刷新颜色）
+        self._update_key_status()
 
 
 class StyleEditDialog(QtWidgets.QDialog):
@@ -1496,7 +1768,7 @@ class StyleEditDialog(QtWidgets.QDialog):
 class TestConnectionWorker(QtCore.QThread):
     """测试连接工作线程"""
     
-    finished = QtCore.pyqtSignal(dict)
+    finished = QtCore.Signal(dict)
     
     def __init__(self, client: AIClient):
         super().__init__()
@@ -1509,7 +1781,7 @@ class TestConnectionWorker(QtCore.QThread):
 
 class OptimizePromptWorker(QtCore.QThread):
     """优化提示词工作线程"""
-    finished = QtCore.pyqtSignal(dict)
+    finished = QtCore.Signal(dict)
 
     def __init__(self, client: AIClient, prompt_text: str):
         super().__init__()
@@ -1667,7 +1939,7 @@ class MigrationDialog(QtWidgets.QDialog):
 class MigrationWorker(QtCore.QThread):
     """迁移工作线程"""
     
-    finished = QtCore.pyqtSignal(dict)
+    finished = QtCore.Signal(dict)
     
     def __init__(self, migration: ConfigMigration, migration_info: Dict[str, Any], 
                  backup: bool, cleanup: bool):
