@@ -111,51 +111,54 @@ class LoadingOverlay(QtWidgets.QWidget):
 
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # noqa: N802 - Qt 命名规范
         painter = QtGui.QPainter(self)
-        painter.setRenderHint(QtGui.QPainter.Antialiasing, True)
+        try:
+            painter.setRenderHint(QtGui.QPainter.Antialiasing, True)
 
-        painter.fillRect(self.rect(), self._overlay_color)
+            painter.fillRect(self.rect(), self._overlay_color)
 
-        center = self.rect().center()
-        indicator_radius = 18
-        stroke_width = 4
+            center = self.rect().center()
+            indicator_radius = 18
+            stroke_width = 4
 
-        painter.save()
-        painter.translate(center)
-        painter.rotate(self._rotation_angle)
+            painter.save()
+            painter.translate(center)
+            painter.rotate(self._rotation_angle)
 
-        gradient = QtGui.QConicalGradient(QtCore.QPointF(0, 0), 0)
-        gradient.setColorAt(0.0, self._accent_color)
-        gradient.setColorAt(0.65, self._accent_color)
-        faded_accent = QtGui.QColor(self._accent_color)
-        faded_accent.setAlpha(max(30, int(self._accent_color.alpha() * 0.2)))
-        gradient.setColorAt(1.0, faded_accent)
+            gradient = QtGui.QConicalGradient(QtCore.QPointF(0, 0), 0)
+            gradient.setColorAt(0.0, self._accent_color)
+            gradient.setColorAt(0.65, self._accent_color)
+            faded_accent = QtGui.QColor(self._accent_color)
+            faded_accent.setAlpha(max(30, int(self._accent_color.alpha() * 0.2)))
+            gradient.setColorAt(1.0, faded_accent)
 
-        pen = QtGui.QPen(QtGui.QBrush(gradient), stroke_width)
-        pen.setCapStyle(QtCore.Qt.RoundCap)
-        painter.setPen(pen)
-        painter.drawArc(
-            QtCore.QRectF(
-                -indicator_radius,
-                -indicator_radius,
-                indicator_radius * 2,
-                indicator_radius * 2,
-            ),
-            0,
-            270 * 16,
-        )
+            pen = QtGui.QPen(QtGui.QBrush(gradient), stroke_width)
+            pen.setCapStyle(QtCore.Qt.RoundCap)
+            painter.setPen(pen)
+            painter.drawArc(
+                QtCore.QRectF(
+                    -indicator_radius,
+                    -indicator_radius,
+                    indicator_radius * 2,
+                    indicator_radius * 2,
+                ),
+                0,
+                270 * 16,
+            )
 
-        track_pen = QtGui.QPen(self._track_color, stroke_width)
-        track_pen.setCapStyle(QtCore.Qt.RoundCap)
-        painter.setPen(track_pen)
-        painter.drawArc(
-            QtCore.QRectF(
-                -indicator_radius,
-                -indicator_radius,
-                indicator_radius * 2,
-                indicator_radius * 2,
-            ),
-            0,
-            360 * 16,
-        )
+            track_pen = QtGui.QPen(self._track_color, stroke_width)
+            track_pen.setCapStyle(QtCore.Qt.RoundCap)
+            painter.setPen(track_pen)
+            painter.drawArc(
+                QtCore.QRectF(
+                    -indicator_radius,
+                    -indicator_radius,
+                    indicator_radius * 2,
+                    indicator_radius * 2,
+                ),
+                0,
+                360 * 16,
+            )
 
-        painter.restore()
+            painter.restore()
+        finally:
+            painter.end()

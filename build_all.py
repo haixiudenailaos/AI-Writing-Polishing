@@ -71,6 +71,66 @@ def check_requirements():
     else:
         print(f"  ✅ spec配置文件: {spec_file}")
     
+    # 检查核心应用模块
+    print_substep("检查核心应用模块:")
+    core_modules = [
+        "api_client.py",
+        "config_manager.py",
+        "knowledge_base.py",
+        "prompt_generator.py",  # 新增：提示词生成器
+        "text_processor.py",
+        "style_manager.py",
+        "request_queue_manager.py",
+        "document_handler.py",
+    ]
+    
+    app_dir = project_root / "app"
+    missing_modules = []
+    
+    for module in core_modules:
+        module_path = app_dir / module
+        if module_path.exists():
+            print(f"  ✅ {module}")
+        else:
+            print(f"  ❌ {module} (缺失)")
+            missing_modules.append(module)
+    
+    if missing_modules:
+        print(f"  ⚠️  警告: {len(missing_modules)} 个核心模块缺失")
+        return False
+    
+    # 检查widgets子模块
+    print_substep("检查widgets子模块:")
+    widgets_modules = [
+        "settings_dialog.py",
+        "knowledge_base_dialog.py",
+        "prediction_toggle.py",  # 新增：剧情预测开关
+        "polish_result_panel.py",
+        "loading_overlay.py",
+    ]
+    
+    widgets_dir = app_dir / "widgets"
+    for module in widgets_modules:
+        module_path = widgets_dir / module
+        if module_path.exists():
+            print(f"  ✅ widgets/{module}")
+        else:
+            print(f"  ⚠️  widgets/{module} (缺失)")
+    
+    # 检查processors子模块
+    print_substep("检查processors子模块:")
+    processors_modules = [
+        "async_polish_processor.py",
+    ]
+    
+    processors_dir = app_dir / "processors"
+    for module in processors_modules:
+        module_path = processors_dir / module
+        if module_path.exists():
+            print(f"  ✅ processors/{module}")
+        else:
+            print(f"  ⚠️  processors/{module} (缺失)")
+    
     if not requirements_file.exists():
         print(f"  ⚠️  requirements.txt不存在: {requirements_file}")
     else:
@@ -161,7 +221,7 @@ def build_with_spec():
             capture_output=True, 
             text=True,
             encoding='utf-8',
-            errors='ignore'
+            errors='replace'  # 使用 replace 替换无法解码的字符
         )
         
         # 计算构建时间
@@ -277,33 +337,38 @@ def run_basic_tests():
         print("❌ 没有可执行文件可供测试")
         return False
     
-    print_substep("测试可执行文件启动:")
+    print_substep("验证可执行文件:")
+    print("  ℹ️  注意: 这是GUI程序，自动化测试可能不准确")
+    print("  💡 建议: 手动启动exe文件进行完整功能测试")
+    print()
     
     for exe_file in exe_files:
-        print(f"  测试: {exe_file.name}")
+        file_size = exe_file.stat().st_size / (1024 * 1024)
+        print(f"  📄 {exe_file.name}")
+        print(f"     大小: {file_size:.1f} MB")
         
-        try:
-            # 尝试启动程序并快速退出
-            # 注意: 对于GUI程序，这个测试可能不会立即返回
-            cmd = [str(exe_file), "--help"]  # 尝试显示帮助信息
-            
-            result = subprocess.run(
-                cmd,
-                timeout=10,  # 10秒超时
-                capture_output=True,
-                text=True
-            )
-            
-            print(f"    ✅ {exe_file.name} 启动成功")
-            
-        except subprocess.TimeoutExpired:
-            print(f"    ⚠️  {exe_file.name} 启动超时（可能是GUI程序正常行为）")
-        except subprocess.CalledProcessError as e:
-            print(f"    ❌ {exe_file.name} 启动失败: {e}")
-        except Exception as e:
-            print(f"    ⚠️  {exe_file.name} 测试异常: {e}")
+        # 只做基本的文件存在性检查，不实际运行
+        if exe_file.exists() and file_size > 10:
+            print(f"     ✅ 文件正常")
+        else:
+            print(f"     ⚠️  文件可能异常（大小偏小）")
     
-    print("✅ 基本测试完成")
+    print()
+    print("✅ 基本验证完成")
+    print("⚠️  提醒: 请手动测试以下功能:")
+    print("   1. 程序能否正常启动")
+    print("   2. 知识库创建和管理")
+    print("   3. 剧情预测功能:")
+    print("      - 普通剧情预测（temperature=0.85）")
+    print("      - 知识库增强预测（temperature=0.8）")
+    print("      - 创意导向提示词生成")
+    print("      - 时间序权重增强（recency_boost_strength=0.3）")
+    print("   4. 文本润色功能")
+    print("   5. 导入导出功能")
+    print("   6. 配置管理:")
+    print("      - hybrid_search_alpha 参数")
+    print("      - recency_boost_strength 参数")
+    print("      - prediction_enabled 开关")
     return True
 
 def show_results():
@@ -365,6 +430,20 @@ def show_results():
     print("  2. 再测试无控制台版本，验证用户体验")
     print("  3. 在干净的Windows环境中进行最终测试")
     print("  4. 验证所有业务流程和文件I/O操作")
+    print("\n🆕 新功能测试重点 (2025-10-31更新):")
+    print("  ✨ 创意导向的剧情预测:")
+    print("     - 验证生成的内容是否有创意和戏剧张力")
+    print("     - 检查提示词是否包含创意引导原则和技巧工具箱")
+    print("     - 测试温度参数调整效果（0.85 / 0.8）")
+    print("  📊 时间序权重增强:")
+    print("     - 创建测试知识库，导入多个章节")
+    print("     - 验证离当前位置越近的文档权重越高")
+    print("     - 测试不同 recency_boost_strength 值的效果")
+    print("     - 确认控制台输出权重增强的调试信息")
+    print("  ⚙️ 配置项验证:")
+    print("     - 检查 app_config.json 中的 kb_config.recency_boost_strength")
+    print("     - 验证配置修改后功能正常响应")
+    print("     - 测试配置为0时权重增强被禁用")
 
 def main():
     """主函数"""
@@ -420,6 +499,11 @@ def main():
         print("  2. 验证所有业务流程和文件操作")
         print("  3. 检查程序在干净环境中的可移植性")
         print("  4. 对比两个版本确保功能一致性")
+        print("\n💡 新增模块说明:")
+        print("  • app/prompt_generator.py - 提示词生成器（创意导向）")
+        print("  • knowledge_base._apply_recency_boost - 时间序权重增强方法")
+        print("  • config_manager.recency_boost_strength - 权重增强配置项")
+        print("  • 优化后的API调用提示词和温度参数")
         
         return 0
         

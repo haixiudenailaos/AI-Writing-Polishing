@@ -43,28 +43,30 @@ class ElidedLabel(QtWidgets.QLabel):
         # Smooth fade overlay on the right when truncated
         if len(self.full_text) > self.max_chars:
             painter = QtGui.QPainter(self)
-            painter.setRenderHint(QtGui.QPainter.Antialiasing, True)
-            w = self.width()
-            h = self.height()
-            # 缩小渐变宽度以适应缩小的界面
-            fade_width = max(18, int(w * 0.05))
-            gradient = QtGui.QLinearGradient(w - fade_width, 0, w, 0)
-            
-            # 使用主题背景色或默认背景色
-            if self._current_theme:
-                bg_color = self._current_theme.get('inputBackground', '#3c3c3c')
-                bg = QtGui.QColor(bg_color)
-            else:
-                bg = self.palette().color(self.backgroundRole())
-            
-            end_color = QtGui.QColor(bg)
-            end_color.setAlpha(220)
-            start_color = QtGui.QColor(bg)
-            start_color.setAlpha(0)
-            gradient.setColorAt(0.0, start_color)
-            gradient.setColorAt(1.0, end_color)
-            painter.fillRect(QtCore.QRect(w - fade_width, 0, fade_width, h), QtGui.QBrush(gradient))
-            painter.end()
+            try:
+                painter.setRenderHint(QtGui.QPainter.Antialiasing, True)
+                w = self.width()
+                h = self.height()
+                # 缩小渐变宽度以适应缩小的界面
+                fade_width = max(18, int(w * 0.05))
+                gradient = QtGui.QLinearGradient(w - fade_width, 0, w, 0)
+                
+                # 使用主题背景色或默认背景色
+                if self._current_theme:
+                    bg_color = self._current_theme.get('inputBackground', '#3c3c3c')
+                    bg = QtGui.QColor(bg_color)
+                else:
+                    bg = self.palette().color(self.backgroundRole())
+                
+                end_color = QtGui.QColor(bg)
+                end_color.setAlpha(220)
+                start_color = QtGui.QColor(bg)
+                start_color.setAlpha(0)
+                gradient.setColorAt(0.0, start_color)
+                gradient.setColorAt(1.0, end_color)
+                painter.fillRect(QtCore.QRect(w - fade_width, 0, fade_width, h), QtGui.QBrush(gradient))
+            finally:
+                painter.end()
 
     def set_theme(self, theme: Dict[str, str]):
         """设置主题"""
@@ -214,6 +216,10 @@ class SettingsDialog(QtWidgets.QDialog):
         advanced_item.setData(QtCore.Qt.UserRole, "advanced")
         self.settings_list.addItem(advanced_item)
         
+        kb_item = QtWidgets.QListWidgetItem("知识库设置")
+        kb_item.setData(QtCore.Qt.UserRole, "knowledge_base")
+        self.settings_list.addItem(kb_item)
+        
         # 默认选中第一项
         self.settings_list.setCurrentRow(0)
         
@@ -237,6 +243,9 @@ class SettingsDialog(QtWidgets.QDialog):
         
         # 高级设置面板
         self._create_advanced_panel()
+        
+        # 知识库设置面板
+        self._create_knowledge_base_panel()
         
         parent_layout.addWidget(self.settings_stack)
     
@@ -303,22 +312,21 @@ class SettingsDialog(QtWidgets.QDialog):
         layout.addWidget(base_url_group)
         
         # 模型
-        model_group = self._create_form_group("模型", "选择AI模型（仅支持以下两个模型）")
+        model_group = self._create_form_group("模型", "选择AI模型")
         self.model_input = QtWidgets.QComboBox()
         self.model_input.setObjectName("ModelInput")
         self.model_input.setEditable(False)  # 改为不可编辑，只能选择预设模型
         # 优化高度，提供更好的视觉效果
         self.model_input.setMinimumHeight(26)
         
-        # 仅支持的两个模型
+        # 支持的模型
         models = [
             "deepseek-ai/DeepSeek-V3.2-Exp",
-            "deepseek-ai/DeepSeek-V3"
         ]
         self.model_input.addItems(models)
         
         # 添加提示标签
-        model_hint = QtWidgets.QLabel("💡 当前仅支持 DeepSeek-V3.2-Exp 和 DeepSeek-V3 模型")
+        model_hint = QtWidgets.QLabel("💡 当前使用 DeepSeek-V3.2-Exp 模型")
         model_hint.setObjectName("ModelHint")
         model_hint.setStyleSheet("color: #4ba6df; font-size: 11px; margin-top: 4px;")
         model_hint.setWordWrap(True)
@@ -600,6 +608,176 @@ class SettingsDialog(QtWidgets.QDialog):
         
         self.settings_stack.addWidget(panel)
     
+    def _create_knowledge_base_panel(self):
+        """创建知识库设置面板"""
+        panel = QtWidgets.QWidget()
+        panel.setObjectName("KnowledgeBasePanel")
+        
+        layout = QtWidgets.QVBoxLayout(panel)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(8)
+        
+        # 标题
+        title = QtWidgets.QLabel("知识库设置")
+        title.setObjectName("PanelTitle")
+        layout.addWidget(title)
+        
+        # 混合检索权重设置
+        hybrid_search_group = self._create_form_group(
+            "混合检索权重调整", 
+            "调整向量检索和关键词检索(BM25)的权重比例"
+        )
+        
+        # 说明文本
+        info_label = QtWidgets.QLabel(
+            "混合检索结合了语义理解（向量检索）和关键词匹配（BM25检索）两种方式。\n"
+            "通过调整权重，可以优化检索效果：\n\n"
+            "• 向量权重高（0.7-1.0）：适合模糊语义查询，理解上下文含义\n"
+            "• 均衡权重（0.4-0.6）：兼顾语义和关键词，通用场景\n"
+            "• BM25权重高（0.0-0.3）：适合精确关键词匹配，查找特定术语"
+        )
+        info_label.setObjectName("HybridSearchInfo")
+        info_label.setWordWrap(True)
+        info_label.setStyleSheet("padding: 8px; background-color: rgba(100, 100, 100, 0.2); border-radius: 4px;")
+        hybrid_search_group.layout().addWidget(info_label)
+        
+        # 权重调整控件容器
+        weight_container = QtWidgets.QWidget()
+        weight_layout = QtWidgets.QVBoxLayout(weight_container)
+        weight_layout.setContentsMargins(0, 8, 0, 0)
+        weight_layout.setSpacing(8)
+        
+        # 当前值显示和快速选择
+        current_value_layout = QtWidgets.QHBoxLayout()
+        current_value_layout.addWidget(QtWidgets.QLabel("向量检索权重:"))
+        
+        self.alpha_value_label = QtWidgets.QLabel("0.70")
+        self.alpha_value_label.setObjectName("AlphaValueLabel")
+        self.alpha_value_label.setStyleSheet("font-weight: bold; font-size: 14px;")
+        current_value_layout.addWidget(self.alpha_value_label)
+        
+        current_value_layout.addStretch()
+        
+        # BM25权重显示
+        current_value_layout.addWidget(QtWidgets.QLabel("BM25检索权重:"))
+        self.bm25_value_label = QtWidgets.QLabel("0.30")
+        self.bm25_value_label.setObjectName("BM25ValueLabel")
+        self.bm25_value_label.setStyleSheet("font-weight: bold; font-size: 14px;")
+        current_value_layout.addWidget(self.bm25_value_label)
+        
+        weight_layout.addLayout(current_value_layout)
+        
+        # 滑动条
+        slider_layout = QtWidgets.QHBoxLayout()
+        slider_layout.addWidget(QtWidgets.QLabel("BM25主导"))
+        
+        self.alpha_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.alpha_slider.setObjectName("AlphaSlider")
+        self.alpha_slider.setMinimum(0)
+        self.alpha_slider.setMaximum(100)
+        self.alpha_slider.setValue(70)
+        self.alpha_slider.setTickPosition(QtWidgets.QSlider.TicksBelow)
+        self.alpha_slider.setTickInterval(10)
+        self.alpha_slider.valueChanged.connect(self._on_alpha_slider_changed)
+        slider_layout.addWidget(self.alpha_slider)
+        
+        slider_layout.addWidget(QtWidgets.QLabel("向量主导"))
+        weight_layout.addLayout(slider_layout)
+        
+        # 手动输入框
+        manual_input_layout = QtWidgets.QHBoxLayout()
+        manual_input_layout.addWidget(QtWidgets.QLabel("手动输入（0.00-1.00）:"))
+        
+        self.alpha_input = QtWidgets.QLineEdit()
+        self.alpha_input.setObjectName("AlphaInput")
+        self.alpha_input.setPlaceholderText("0.70")
+        self.alpha_input.setMaximumWidth(80)
+        self.alpha_input.setText("0.70")
+        self.alpha_input.textChanged.connect(self._on_alpha_input_changed)
+        manual_input_layout.addWidget(self.alpha_input)
+        
+        manual_input_layout.addStretch()
+        weight_layout.addLayout(manual_input_layout)
+        
+        # 快速预设按钮
+        preset_layout = QtWidgets.QHBoxLayout()
+        preset_layout.addWidget(QtWidgets.QLabel("快速预设:"))
+        
+        preset_configs = [
+            ("纯BM25", 0.0),
+            ("BM25主导", 0.3),
+            ("均衡", 0.5),
+            ("向量主导", 0.7),
+            ("纯向量", 1.0)
+        ]
+        
+        for name, value in preset_configs:
+            btn = QtWidgets.QPushButton(name)
+            btn.setObjectName("PresetButton")
+            btn.setMinimumSize(60, 26)
+            btn.clicked.connect(lambda checked, v=value: self._set_alpha_value(v))
+            preset_layout.addWidget(btn)
+        
+        preset_layout.addStretch()
+        weight_layout.addLayout(preset_layout)
+        
+        hybrid_search_group.layout().addWidget(weight_container)
+        layout.addWidget(hybrid_search_group)
+        
+        # 效果说明
+        effect_group = self._create_form_group("效果说明", "不同权重配置的适用场景")
+        
+        effect_text = QtWidgets.QLabel(
+            "【向量主导模式】（推荐，默认0.7）\n"
+            "• 优势：理解语义、上下文，查询方式灵活\n"
+            "• 适用：剧情预测、风格分析、模糊查询\n"
+            "• 示例：「找类似的战斗场景」\n\n"
+            "【均衡模式】（0.5）\n"
+            "• 优势：兼顾语义理解和关键词精确度\n"
+            "• 适用：通用场景，不确定查询类型时\n"
+            "• 示例：「张三的对话片段」\n\n"
+            "【BM25主导模式】（0.3）\n"
+            "• 优势：精确匹配关键词、专有名词\n"
+            "• 适用：查找特定术语、角色名、地点\n"
+            "• 示例：「包含'北斗星'的段落」"
+        )
+        effect_text.setObjectName("EffectText")
+        effect_text.setWordWrap(True)
+        effect_text.setStyleSheet("padding: 8px;")
+        effect_group.layout().addWidget(effect_text)
+        
+        layout.addWidget(effect_group)
+        layout.addStretch()
+        
+        self.settings_stack.addWidget(panel)
+    
+    def _on_alpha_slider_changed(self, value: int):
+        """滑动条值改变"""
+        alpha = value / 100.0
+        self._update_alpha_display(alpha)
+        self.alpha_input.setText(f"{alpha:.2f}")
+    
+    def _on_alpha_input_changed(self, text: str):
+        """手动输入值改变"""
+        try:
+            alpha = float(text)
+            if 0.0 <= alpha <= 1.0:
+                self._update_alpha_display(alpha)
+                self.alpha_slider.setValue(int(alpha * 100))
+        except ValueError:
+            pass
+    
+    def _set_alpha_value(self, alpha: float):
+        """设置alpha值"""
+        self._update_alpha_display(alpha)
+        self.alpha_slider.setValue(int(alpha * 100))
+        self.alpha_input.setText(f"{alpha:.2f}")
+    
+    def _update_alpha_display(self, alpha: float):
+        """更新显示的权重值"""
+        self.alpha_value_label.setText(f"{alpha:.2f}")
+        self.bm25_value_label.setText(f"{1-alpha:.2f}")
+    
     def _create_form_group(self, title: str, description: str = "") -> QtWidgets.QGroupBox:
         """创建表单组"""
         group = QtWidgets.QGroupBox(title)
@@ -768,6 +946,12 @@ class SettingsDialog(QtWidgets.QDialog):
             self.embedding_model_input.setCurrentIndex(embedding_index)
         else:
             self.embedding_model_input.setCurrentText(embedding_model_text)
+        
+        # 加载知识库配置
+        kb_config = self.config_manager.get_kb_config()
+        if hasattr(self, 'alpha_slider'):
+            alpha = kb_config.hybrid_search_alpha
+            self._set_alpha_value(alpha)
         
         # 加载风格配置
         self._load_style_config()
@@ -1137,6 +1321,15 @@ class SettingsDialog(QtWidgets.QDialog):
                 embedding_api_key=self.embedding_key_input.text().strip(),
                 embedding_model=self.embedding_model_input.currentText().strip()
             )
+            
+            # 保存知识库配置
+            if hasattr(self, 'alpha_input'):
+                try:
+                    alpha = float(self.alpha_input.text())
+                    alpha = max(0.0, min(1.0, alpha))  # 确保在有效范围内
+                    self.config_manager.update_hybrid_search_alpha(alpha)
+                except ValueError:
+                    pass
             
             # 保存风格选择
             selected_style_ids = []

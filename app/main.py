@@ -39,6 +39,7 @@ from app.auto_save_manager import AutoSaveManager
 from app.widgets.batch_polish_dialog import BatchPolishDialog
 from app.processors.async_polish_processor import AsyncPolishProcessor, HeartbeatManager
 from app.request_queue_manager import RequestQueueManager, RequestType, RequestPriority
+from app.config_manager import PolishStyle
 
 OUTPUT_ITEM_ROLE = QtCore.Qt.UserRole + 1
 
@@ -139,32 +140,35 @@ class VsCodeEditor(QtWidgets.QPlainTextEdit):
 
     def paint_line_number_area(self, event: QtGui.QPaintEvent) -> None:
         painter = QtGui.QPainter(self._line_number_area)
-        background_color = self._theme_color("lineNumberBackground", "#252526")
-        foreground_color = self._theme_color("lineNumberForeground", "#858585")
-        painter.fillRect(event.rect(), background_color)
-        painter.setPen(foreground_color)
-        painter.setFont(self.font())
+        try:
+            background_color = self._theme_color("lineNumberBackground", "#252526")
+            foreground_color = self._theme_color("lineNumberForeground", "#858585")
+            painter.fillRect(event.rect(), background_color)
+            painter.setPen(foreground_color)
+            painter.setFont(self.font())
 
-        block = self.firstVisibleBlock()
-        block_number = block.blockNumber()
-        top = int(self.blockBoundingGeometry(block).translated(self.contentOffset()).top())
-        bottom = top + int(self.blockBoundingRect(block).height())
-        line_height = self.fontMetrics().height()
-
-        while block.isValid() and top <= event.rect().bottom():
-            if block.isVisible() and bottom >= event.rect().top():
-                painter.drawText(
-                    0,
-                    top,
-                    self._line_number_area.width() - 6,
-                    line_height,
-                    QtCore.Qt.AlignRight,
-                    str(block_number + 1),
-                )
-            block = block.next()
-            block_number += 1
-            top = bottom
+            block = self.firstVisibleBlock()
+            block_number = block.blockNumber()
+            top = int(self.blockBoundingGeometry(block).translated(self.contentOffset()).top())
             bottom = top + int(self.blockBoundingRect(block).height())
+            line_height = self.fontMetrics().height()
+
+            while block.isValid() and top <= event.rect().bottom():
+                if block.isVisible() and bottom >= event.rect().top():
+                    painter.drawText(
+                        0,
+                        top,
+                        self._line_number_area.width() - 6,
+                        line_height,
+                        QtCore.Qt.AlignRight,
+                        str(block_number + 1),
+                    )
+                block = block.next()
+                block_number += 1
+                top = bottom
+                bottom = top + int(self.blockBoundingRect(block).height())
+        finally:
+            painter.end()
 
     def _highlight_current_line(self) -> None:
         if self.isReadOnly():
@@ -452,6 +456,13 @@ class MainWindow(QtWidgets.QMainWindow):
         # 初始化知识库管理器
         self._kb_manager = KnowledgeBaseManager()
         
+        # 当前激活的知识库（用于剧情预测）
+        self._active_kb = None
+        self._active_kb_id = None
+        
+        # 重排序客户端（用于知识库增强预测）
+        self._rerank_client = None
+        
         # 初始化实时导出管理器
         self._auto_export_manager = AutoExportManager(debounce_ms=2000, parent=self)
         
@@ -646,6 +657,16 @@ class MainWindow(QtWidgets.QMainWindow):
         create_kb_button.setCursor(QtGui.QCursor(QtCore.Qt.PointingHandCursor))
         create_kb_button.clicked.connect(self._on_create_knowledge_base)
         
+        # 知识库选择按钮
+        select_kb_button = QtWidgets.QPushButton("选择知识库")
+        select_kb_button.setObjectName("SelectKBButton")
+        select_kb_button.setCursor(QtGui.QCursor(QtCore.Qt.PointingHandCursor))
+        select_kb_button.clicked.connect(self._on_select_knowledge_base)
+        
+        # 当前知识库状态标签
+        kb_status_label = QtWidgets.QLabel("知识库: 未激活")
+        kb_status_label.setObjectName("KBStatusLabel")
+        
         # 一键润色按钮
         batch_polish_button = QtWidgets.QPushButton("✨ 一键润色")
         batch_polish_button.setObjectName("BatchPolishButton")
@@ -690,6 +711,8 @@ class MainWindow(QtWidgets.QMainWindow):
         header_layout.addSpacing(12)
         header_layout.addWidget(import_folder_button, 0)
         header_layout.addWidget(create_kb_button, 0)
+        header_layout.addWidget(select_kb_button, 0)
+        header_layout.addWidget(kb_status_label, 0)
         header_layout.addWidget(batch_polish_button, 0)
         header_layout.addWidget(theme_selector, 0)
         header_layout.addWidget(settings_button, 0)
@@ -762,6 +785,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._quick_reject_button = quick_reject_button
         self._message_label = message_label
         self._overlay = overlay
+        self._kb_status_label = kb_status_label
 
         self.setCentralWidget(central_container)
 
@@ -1106,10 +1130,374 @@ class MainWindow(QtWidgets.QMainWindow):
         """知识库创建完成"""
         if worker.result:
             dialog.set_completed(success=True)
-            self._show_message(f"知识库创建成功: {worker.result.name}", duration_ms=3000, is_error=False)
+            
+            # 生成知识库的定制化提示词
+            kb = worker.result
+            self._generate_kb_prompts(kb, dialog)
+            
+            # 将新创建的知识库设置为活动知识库
+            self._activate_knowledge_base(kb)
+            
+            self._show_message(
+                f"知识库创建成功并已激活: {kb.name}，已生成定制化提示词", 
+                duration_ms=4000, 
+                is_error=False
+            )
         else:
             dialog.set_completed(success=False)
             self._show_message("知识库创建失败", duration_ms=3000, is_error=True)
+    
+    def _generate_kb_prompts(self, kb, progress_dialog=None):
+        """为知识库生成定制化提示词
+        
+        Args:
+            kb: 知识库对象
+            progress_dialog: 进度对话框（可选）
+        """
+        try:
+            if progress_dialog:
+                progress_dialog.log("正在分析文档特征...")
+            
+            # 导入提示词生成器
+            from app.prompt_generator import PromptGenerator
+            
+            generator = PromptGenerator()
+            
+            # 提取文档特征
+            features = generator.extract_features_from_documents(kb.documents, sample_size=50)
+            
+            # 输出特征提取结果（调试用）
+            if progress_dialog:
+                progress_dialog.log(f"✓ 特征提取完成：平均句长={features.get('avg_sentence_length', 0):.1f}字")
+                style_info = features.get('writing_style', {})
+                if style_info:
+                    progress_dialog.log(f"  视角={style_info.get('narrative_perspective', '未知')}, "
+                                      f"节奏={style_info.get('pacing', '未知')}, "
+                                      f"描写={style_info.get('descriptive_level', '未知')}")
+            
+            print(f"[DEBUG] 提取的特征：")
+            print(f"  - 平均句长: {features.get('avg_sentence_length', 0):.1f}")
+            print(f"  - 词汇丰富度: {features.get('vocabulary_richness', 0):.2f}")
+            print(f"  - 常见短语: {features.get('common_phrases', [])[:5]}")
+            print(f"  - 句式模式: {features.get('common_patterns', [])}")
+            print(f"  - 写作风格: {features.get('writing_style', {})}")
+            
+            if progress_dialog:
+                progress_dialog.log("正在生成润色风格提示词...")
+            
+            # 生成润色风格提示词
+            polish_prompt = generator.generate_polish_style_prompt(kb.name, features)
+            
+            # 输出润色提示词（调试用）
+            print(f"\n[DEBUG] 生成的润色风格提示词：")
+            print("=" * 60)
+            print(polish_prompt)
+            print("=" * 60)
+            
+            if progress_dialog:
+                progress_dialog.log("正在生成预测提示词...")
+            
+            # 生成预测提示词
+            prediction_prompt = generator.generate_prediction_prompt(kb.name, features)
+            
+            # 输出预测提示词（调试用）
+            print(f"\n[DEBUG] 生成的预测提示词：")
+            print("=" * 60)
+            print(prediction_prompt)
+            print("=" * 60)
+            
+            # 保存为自定义风格
+            if progress_dialog:
+                progress_dialog.log("正在保存提示词...")
+            
+            # 生成润色风格ID
+            polish_style_id = f"kb_polish_{kb.id[:8]}"
+            prediction_style_id = f"kb_prediction_{kb.id[:8]}"
+            
+            # 添加润色风格（注意：这是润色风格，用于按Enter时的润色）
+            polish_style_added = self._style_manager.add_custom_style(
+                PolishStyle(
+                    id=polish_style_id,
+                    name=f"{kb.name} - 润色风格",
+                    prompt=polish_prompt,
+                    is_preset=False,
+                    parameters={}
+                )
+            )
+            
+            # 添加预测风格（注意：这也是作为润色风格保存，但在预测时使用）
+            prediction_style_added = self._style_manager.add_custom_style(
+                PolishStyle(
+                    id=prediction_style_id,
+                    name=f"{kb.name} - 预测风格",
+                    prompt=prediction_prompt,
+                    is_preset=False,
+                    parameters={}
+                )
+            )
+            
+            # 更新知识库的提示词ID
+            if polish_style_added and prediction_style_added:
+                self._kb_manager.update_kb_prompt_ids(
+                    kb.id,
+                    polish_style_id=polish_style_id,
+                    prediction_style_id=prediction_style_id
+                )
+                
+                # 更新内存中的知识库对象
+                kb.polish_style_id = polish_style_id
+                kb.prediction_style_id = prediction_style_id
+                
+                if progress_dialog:
+                    progress_dialog.log("✓ 定制化提示词生成成功")
+                
+                print(f"[INFO] 知识库提示词生成成功: 润色={polish_style_id}, 预测={prediction_style_id}")
+            else:
+                if progress_dialog:
+                    progress_dialog.log("⚠ 提示词保存失败（ID可能已存在）")
+                print(f"[WARN] 提示词保存失败")
+        
+        except Exception as e:
+            if progress_dialog:
+                progress_dialog.log(f"⚠ 提示词生成失败: {str(e)}")
+            print(f"[ERROR] 生成知识库提示词失败: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def _activate_knowledge_base(self, kb):
+        """激活指定的知识库
+        
+        Args:
+            kb: 知识库对象
+        """
+        self._active_kb = kb
+        self._active_kb_id = kb.id
+        
+        # 初始化重排客户端（用于知识库增强预测）
+        api_config = self._config_manager.get_api_config()
+        if api_config.embedding_api_key:
+            # 移除 "not self._rerank_client" 的检查，确保每次都尝试初始化
+            from app.knowledge_base import RerankClient
+            try:
+                self._rerank_client = RerankClient(
+                    api_key=api_config.embedding_api_key,
+                    model="gte-rerank-v2"  # 使用阿里云的重排序模型
+                )
+                print(f"[INFO] 重排序客户端已初始化，模型: gte-rerank-v2")
+                print(f"[INFO] 重排客户端对象: {self._rerank_client}")
+            except Exception as e:
+                print(f"[ERROR] 重排序客户端初始化失败: {e}")
+                import traceback
+                traceback.print_exc()
+                self._rerank_client = None
+        else:
+            print(f"[WARN] 未配置阿里云API密钥，无法初始化重排客户端")
+            self._rerank_client = None
+        
+        # 自动加载知识库关联的提示词
+        self._load_kb_prompts(kb)
+        
+        # 更新UI状态
+        if hasattr(self, '_kb_status_label') and self._kb_status_label:
+            rerank_status = "已启用" if self._rerank_client else "未启用"
+            self._kb_status_label.setText(f"知识库: {kb.name} (重排:{rerank_status})")
+            print(f"[INFO] 已激活知识库: {kb.name}, 文档数: {len(kb.documents)}, 重排模型: {rerank_status}")
+    
+    def _load_kb_prompts(self, kb):
+        """加载知识库关联的提示词
+        
+        Args:
+            kb: 知识库对象
+        """
+        try:
+            # 检查知识库是否有关联的润色提示词
+            if kb.polish_style_id:
+                # 验证提示词是否存在
+                polish_style = self._style_manager.get_style_by_id(kb.polish_style_id)
+                
+                if polish_style:
+                    # 自动选择该提示词（用于润色）
+                    self._style_manager.set_selected_styles([kb.polish_style_id])
+                    print(f"[INFO] 已自动加载知识库润色提示词: {polish_style.name}")
+                    self._show_message(
+                        f"已加载知识库润色风格: {polish_style.name}",
+                        duration_ms=3000,
+                        is_error=False
+                    )
+                else:
+                    print(f"[WARN] 知识库关联的润色提示词不存在: {kb.polish_style_id}")
+                    self._show_message(
+                        "知识库的润色提示词已被删除，将使用当前选择的提示词",
+                        duration_ms=3000,
+                        is_error=False
+                    )
+            else:
+                print(f"[INFO] 知识库未关联润色提示词，使用当前选择的提示词")
+            
+            # 预测提示词在调用预测时单独处理，不自动激活
+            # （因为预测和润色使用不同的提示词）
+            if kb.prediction_style_id:
+                prediction_style = self._style_manager.get_style_by_id(kb.prediction_style_id)
+                if prediction_style:
+                    print(f"[INFO] 知识库预测提示词: {prediction_style.name}")
+                else:
+                    print(f"[WARN] 知识库关联的预测提示词不存在: {kb.prediction_style_id}")
+        
+        except Exception as e:
+            print(f"[ERROR] 加载知识库提示词失败: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def _on_select_knowledge_base(self):
+        """选择知识库"""
+        # 获取所有知识库列表
+        kb_list = self._kb_manager.list_knowledge_bases()
+        
+        if not kb_list:
+            QtWidgets.QMessageBox.information(
+                self,
+                "提示",
+                "当前没有可用的知识库。\n\n请先创建一个知识库。"
+            )
+            return
+        
+        # 构建选择对话框
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle("选择知识库")
+        dialog.setModal(True)
+        dialog.resize(600, 400)
+        
+        layout = QtWidgets.QVBoxLayout(dialog)
+        
+        # 添加说明标签
+        info_label = QtWidgets.QLabel(
+            "选择一个知识库用于增强剧情预测功能。\n"
+            "激活知识库后，AI将基于知识库内容生成更准确的预测。"
+        )
+        info_label.setWordWrap(True)
+        layout.addWidget(info_label)
+        
+        # 添加知识库列表
+        list_widget = QtWidgets.QListWidget()
+        list_widget.setObjectName("KBListWidget")
+        
+        for kb_info in kb_list:
+            item_text = f"{kb_info['name']} ({kb_info['total_documents']} 个文档)"
+            if self._active_kb_id and kb_info['id'] == self._active_kb_id:
+                item_text += " [当前激活]"
+            
+            item = QtWidgets.QListWidgetItem(item_text)
+            item.setData(QtCore.Qt.UserRole, kb_info)
+            list_widget.addItem(item)
+        
+        layout.addWidget(list_widget)
+        
+        # 添加按钮
+        button_layout = QtWidgets.QHBoxLayout()
+        
+        activate_button = QtWidgets.QPushButton("激活选中的知识库")
+        activate_button.clicked.connect(lambda: self._on_activate_selected_kb(list_widget, dialog))
+        
+        deactivate_button = QtWidgets.QPushButton("停用知识库")
+        deactivate_button.clicked.connect(lambda: self._on_deactivate_kb(dialog))
+        
+        cancel_button = QtWidgets.QPushButton("取消")
+        cancel_button.clicked.connect(dialog.reject)
+        
+        button_layout.addWidget(activate_button)
+        button_layout.addWidget(deactivate_button)
+        button_layout.addStretch()
+        button_layout.addWidget(cancel_button)
+        
+        layout.addLayout(button_layout)
+        
+        # 应用主题
+        if hasattr(self, '_current_theme'):
+            dialog.setStyleSheet(f"""
+                QDialog {{
+                    background-color: {self._current_theme.get('editorBackground', '#1e1e1e')};
+                    color: {self._current_theme.get('editorForeground', '#d4d4d4')};
+                }}
+                QPushButton {{
+                    background-color: {self._current_theme.get('buttonBackground', '#0e639c')};
+                    color: {self._current_theme.get('buttonForeground', '#ffffff')};
+                    border: 1px solid {self._current_theme.get('borderColor', '#3e3e42')};
+                    border-radius: 3px;
+                    padding: 6px 14px;
+                }}
+                QPushButton:hover {{
+                    background-color: {self._current_theme.get('buttonHoverBackground', '#1177bb')};
+                }}
+                QListWidget {{
+                    background-color: {self._current_theme.get('inputBackground', '#3c3c3c')};
+                    color: {self._current_theme.get('inputForeground', '#ffffff')};
+                    border: 1px solid {self._current_theme.get('borderColor', '#3e3e42')};
+                    border-radius: 3px;
+                }}
+            """)
+        
+        dialog.exec()
+    
+    def _on_activate_selected_kb(self, list_widget, dialog):
+        """激活选中的知识库"""
+        current_item = list_widget.currentItem()
+        if not current_item:
+            QtWidgets.QMessageBox.warning(
+                dialog,
+                "提示",
+                "请先选择一个知识库。"
+            )
+            return
+        
+        kb_info = current_item.data(QtCore.Qt.UserRole)
+        kb_id = kb_info['id']
+        
+        # 加载知识库
+        try:
+            kb = self._kb_manager.load_knowledge_base(kb_id)
+            if not kb:
+                QtWidgets.QMessageBox.warning(
+                    dialog,
+                    "错误",
+                    f"无法加载知识库: {kb_info['name']}"
+                )
+                return
+            
+            # 激活知识库
+            self._activate_knowledge_base(kb)
+            
+            QtWidgets.QMessageBox.information(
+                dialog,
+                "成功",
+                f"已激活知识库: {kb.name}\n\n剧情预测功能将基于此知识库生成内容。"
+            )
+            
+            dialog.accept()
+            
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(
+                dialog,
+                "错误",
+                f"加载知识库失败：\n\n{str(e)}"
+            )
+    
+    def _on_deactivate_kb(self, dialog):
+        """停用知识库"""
+        self._active_kb = None
+        self._active_kb_id = None
+        
+        # 更新UI状态
+        if hasattr(self, '_kb_status_label') and self._kb_status_label:
+            self._kb_status_label.setText("知识库: 未激活")
+        
+        QtWidgets.QMessageBox.information(
+            dialog,
+            "成功",
+            "已停用知识库。\n\n剧情预测功能将使用普通模式。"
+        )
+        
+        print(f"[INFO] 已停用知识库")
+        dialog.accept()
     
     def _polish_text_with_context_async(self, context_lines: list[str], target_line: str, line_number: int) -> str:
         """使用上下文异步润色文本（使用请求队列避免与预测冲突）"""
@@ -1353,9 +1741,22 @@ class MainWindow(QtWidgets.QMainWindow):
         Args:
             full_text: 当前编辑器中的全部文本内容
         """
-        # 获取当前选中的风格组合提示词
-        selected_styles = self._style_manager.get_selected_styles()
-        style_prompt = self._style_manager.get_combined_prompt(selected_styles) if selected_styles else None
+        # 优先使用知识库的预测提示词，如果不存在则使用当前选中的风格
+        style_prompt = None
+        
+        if self._active_kb and self._active_kb.prediction_style_id:
+            # 尝试获取知识库的预测提示词
+            prediction_style = self._style_manager.get_style_by_id(self._active_kb.prediction_style_id)
+            if prediction_style:
+                style_prompt = prediction_style.prompt
+                print(f"[INFO] 使用知识库预测提示词: {prediction_style.name}")
+            else:
+                print(f"[WARN] 知识库预测提示词不存在，回退到当前选中的风格")
+        
+        # 如果没有知识库预测提示词，使用当前选中的风格组合提示词
+        if not style_prompt:
+            selected_styles = self._style_manager.get_selected_styles()
+            style_prompt = self._style_manager.get_combined_prompt(selected_styles) if selected_styles else None
         
         # 生成请求ID
         import time
@@ -1368,9 +1769,45 @@ class MainWindow(QtWidgets.QMainWindow):
         _full_text = full_text
         _style_prompt = style_prompt
         
+        # 检查是否有活动的知识库
+        has_kb = self._active_kb is not None and self._active_kb.documents
+        
         # 定义执行函数
         def execute_prediction():
-            return self._api_client.predict_plot_continuation(_full_text, _style_prompt or "")
+            if has_kb:
+                # 使用知识库增强预测
+                print(f"[INFO] 使用知识库增强预测，知识库: {self._active_kb.name}")
+                print(f"[INFO] 重排客户端状态: {'已初始化' if self._rerank_client else '未初始化'}")
+                if self._rerank_client:
+                    print(f"[INFO] 重排客户端对象: {self._rerank_client}")
+                
+                # 确保向量化客户端已初始化
+                api_config = self._config_manager.get_api_config()
+                if api_config.embedding_api_key:
+                    self._kb_manager.set_embedding_client(
+                        api_config.embedding_api_key,
+                        api_config.embedding_model
+                    )
+                
+                # 提取当前上下文（最后1000字，用于知识库检索）
+                from app.api_client import truncate_context
+                current_context = truncate_context(_full_text, max_chars=1000)
+                
+                print(f"[INFO] 准备调用知识库增强预测，上下文长度: {len(current_context)}")
+                
+                # 调用知识库增强预测
+                return self._api_client.predict_plot_continuation_with_kb(
+                    current_context=current_context,
+                    kb_manager=self._kb_manager,
+                    kb=self._active_kb,
+                    rerank_client=self._rerank_client,
+                    style_prompt=_style_prompt or "",
+                    min_relevance_threshold=0.25  # 使用用户调整后的阈值
+                )
+            else:
+                # 使用普通预测（无知识库）
+                print(f"[INFO] 使用普通预测（无活动知识库）")
+                return self._api_client.predict_plot_continuation(_full_text, _style_prompt or "")
         
         # 定义成功回调（需要在主线程中执行）
         def on_success(predicted_text):
@@ -1403,7 +1840,10 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         
         # 显示简短提示，不干扰用户
-        self._show_message("剧情预测已加入队列...", duration_ms=1500, is_error=False)
+        if has_kb:
+            self._show_message(f"知识库增强预测已加入队列...", duration_ms=1500, is_error=False)
+        else:
+            self._show_message("剧情预测已加入队列...", duration_ms=1500, is_error=False)
     
     @QtCore.Slot(str)
     def _handle_prediction_success(self, predicted_text: str):
@@ -1833,6 +2273,14 @@ class MainWindow(QtWidgets.QMainWindow):
                     "  color: #ffffff;",
                     "}",
                     "QLabel#AutoExportStatusLabel {",
+                    "  font-size: 11px;",
+                    f"  color: {theme.get('accent', '#007acc')};",
+                    "  padding: 4px 8px;",
+                    f"  border: 1px solid {theme['borderColor']};",
+                    "  border-radius: 3px;",
+                    f"  background-color: {theme.get('panelBackground', '#2d2d30')};",
+                    "}",
+                    "QLabel#KBStatusLabel {",
                     "  font-size: 11px;",
                     f"  color: {theme.get('accent', '#007acc')};",
                     "  padding: 4px 8px;",

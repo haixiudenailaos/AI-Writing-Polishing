@@ -51,6 +51,7 @@ hiddenimports = [
     'app.config_migration',
     'app.document_handler',
     'app.knowledge_base',
+    'app.prompt_generator',
     'app.request_queue_manager',
     'app.settings_storage',
     'app.style_manager',

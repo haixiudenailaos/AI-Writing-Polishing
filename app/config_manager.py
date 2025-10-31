@@ -53,6 +53,25 @@ class WorkspaceConfig:
 
 
 @dataclass
+class KnowledgeBaseConfig:
+    """知识库配置数据结构"""
+    hybrid_search_alpha: float = 0.7  # 混合检索权重（0.0-1.0），向量检索权重，BM25权重为1-alpha
+    # alpha=0.0: 纯BM25关键词检索，适合精确匹配查询
+    # alpha=0.3: BM25主导，适合关键词密集的文本
+    # alpha=0.5: 均衡模式，兼顾语义和关键词
+    # alpha=0.7: 向量主导（默认），适合语义理解
+    # alpha=1.0: 纯向量检索，适合模糊语义查询
+    
+    recency_boost_strength: float = 0.3  # 时间序权重增强强度（0.0-1.0）
+    # 用于剧情预测时，让离当前位置越近的文档获得更高权重
+    # 0.0: 不增强，完全依赖相似度（适合发现远处伏笔）
+    # 0.2: 温和增强，更多依赖原始相似度
+    # 0.3: 适中增强（默认），平衡近期剧情和远处伏笔
+    # 0.5: 强力增强，更偏重近期剧情发展
+    # 1.0: 最大增强，几乎只关注最近的内容
+
+
+@dataclass
 class AppConfig:
     """应用配置数据结构"""
     api_config: APIConfig = field(default_factory=APIConfig)
@@ -62,6 +81,7 @@ class AppConfig:
     version: str = "2.0.0"
     export_config: ExportConfig = field(default_factory=ExportConfig)  # 导出配置
     workspace_config: WorkspaceConfig = field(default_factory=WorkspaceConfig)  # 工作区配置
+    kb_config: KnowledgeBaseConfig = field(default_factory=KnowledgeBaseConfig)  # 知识库配置
 
 
 class ConfigManager:
@@ -297,7 +317,8 @@ class ConfigManager:
             theme="dark",
             version="2.1.0",
             export_config=ExportConfig(),
-            workspace_config=WorkspaceConfig()
+            workspace_config=WorkspaceConfig(),
+            kb_config=KnowledgeBaseConfig()
         )
     
     def _parse_config_data(self, data: Dict[str, Any]) -> AppConfig:
@@ -369,6 +390,12 @@ class ConfigManager:
             last_opened_folder=workspace_data.get("last_opened_folder", "")
         )
         
+        # 解析知识库配置
+        kb_data = data.get("kb_config", {})
+        kb_config = KnowledgeBaseConfig(
+            hybrid_search_alpha=float(kb_data.get("hybrid_search_alpha", 0.7))
+        )
+        
         return AppConfig(
             api_config=api_config,
             polish_styles=polish_styles,
@@ -376,7 +403,8 @@ class ConfigManager:
             theme=data.get("theme", "dark"),
             version=data.get("version", "2.0.0"),
             export_config=export_config,
-            workspace_config=workspace_config
+            workspace_config=workspace_config,
+            kb_config=kb_config
         )
     
     def _needs_migration(self) -> bool:
@@ -469,13 +497,17 @@ class ConfigManager:
         # 工作区配置
         workspace_config_dict = asdict(config.workspace_config)
         
+        # 知识库配置
+        kb_config_dict = asdict(config.kb_config)
+        
         return {
             "api_config": api_config_dict,
             "polish_styles": polish_styles_dict,
             "theme": config.theme,
             "version": config.version,
             "export_config": export_config_dict,
-            "workspace_config": workspace_config_dict
+            "workspace_config": workspace_config_dict,
+            "kb_config": kb_config_dict
         }
     
     def update_api_config(self, api_key: str, base_url: Optional[str] = None, 
@@ -736,4 +768,21 @@ class ConfigManager:
         """
         config = self.get_config()
         config.workspace_config = workspace_config
+        self.save_config()
+    
+    def get_kb_config(self) -> KnowledgeBaseConfig:
+        """获取知识库配置"""
+        config = self.get_config()
+        return config.kb_config
+    
+    def update_hybrid_search_alpha(self, alpha: float) -> None:
+        """更新混合检索权重
+        
+        Args:
+            alpha: 向量检索权重（0.0-1.0）
+        """
+        # 确保alpha在有效范围内
+        alpha = max(0.0, min(1.0, alpha))
+        config = self.get_config()
+        config.kb_config.hybrid_search_alpha = alpha
         self.save_config()
