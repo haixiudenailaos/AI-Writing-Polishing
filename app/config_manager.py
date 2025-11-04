@@ -50,6 +50,16 @@ class WorkspaceConfig:
     """工作区配置数据结构"""
     last_opened_folder: str = ""  # 上次打开的文件夹路径
     prediction_enabled: bool = False  # 剧情预测功能是否启用（默认关闭）
+    
+    # 激活的知识库ID列表（支持激活多个知识库）
+    active_history_kb_ids: List[str] = field(default_factory=list)  # 激活的历史知识库ID列表
+    active_outline_kb_ids: List[str] = field(default_factory=list)  # 激活的大纲知识库ID列表
+    active_character_kb_ids: List[str] = field(default_factory=list)  # 激活的人设知识库ID列表
+    
+    # 向后兼容：保留旧字段以支持配置迁移
+    active_history_kb_id: str = ""  # 已废弃，用于迁移
+    active_outline_kb_id: str = ""  # 已废弃，用于迁移
+    active_character_kb_id: str = ""  # 已废弃，用于迁移
 
 
 @dataclass
@@ -82,6 +92,8 @@ class AppConfig:
     export_config: ExportConfig = field(default_factory=ExportConfig)  # 导出配置
     workspace_config: WorkspaceConfig = field(default_factory=WorkspaceConfig)  # 工作区配置
     kb_config: KnowledgeBaseConfig = field(default_factory=KnowledgeBaseConfig)  # 知识库配置
+    # 窗口状态（位置、大小、最大化等），用于持久化UI窗口几何信息
+    window_state: Dict[str, Any] = field(default_factory=dict)
 
 
 class ConfigManager:
@@ -386,8 +398,36 @@ class ConfigManager:
         
         # 解析工作区配置
         workspace_data = data.get("workspace_config", {})
+        
+        # 处理知识库ID（支持新旧格式）
+        # 新格式：active_history_kb_ids (列表)
+        # 旧格式：active_history_kb_id (字符串)
+        active_history_kb_ids = workspace_data.get("active_history_kb_ids", [])
+        active_outline_kb_ids = workspace_data.get("active_outline_kb_ids", [])
+        active_character_kb_ids = workspace_data.get("active_character_kb_ids", [])
+        
+        # 兼容旧格式：如果新格式为空，尝试从旧格式迁移
+        if not active_history_kb_ids:
+            old_id = workspace_data.get("active_history_kb_id", "")
+            if old_id:
+                active_history_kb_ids = [old_id]
+        
+        if not active_outline_kb_ids:
+            old_id = workspace_data.get("active_outline_kb_id", "")
+            if old_id:
+                active_outline_kb_ids = [old_id]
+        
+        if not active_character_kb_ids:
+            old_id = workspace_data.get("active_character_kb_id", "")
+            if old_id:
+                active_character_kb_ids = [old_id]
+        
         workspace_config = WorkspaceConfig(
-            last_opened_folder=workspace_data.get("last_opened_folder", "")
+            last_opened_folder=workspace_data.get("last_opened_folder", ""),
+            prediction_enabled=workspace_data.get("prediction_enabled", False),
+            active_history_kb_ids=active_history_kb_ids,
+            active_outline_kb_ids=active_outline_kb_ids,
+            active_character_kb_ids=active_character_kb_ids
         )
         
         # 解析知识库配置
@@ -404,7 +444,8 @@ class ConfigManager:
             version=data.get("version", "2.0.0"),
             export_config=export_config,
             workspace_config=workspace_config,
-            kb_config=kb_config
+            kb_config=kb_config,
+            window_state=data.get("window_state", {})
         )
     
     def _needs_migration(self) -> bool:
@@ -507,7 +548,8 @@ class ConfigManager:
             "version": config.version,
             "export_config": export_config_dict,
             "workspace_config": workspace_config_dict,
-            "kb_config": kb_config_dict
+            "kb_config": kb_config_dict,
+            "window_state": config.window_state
         }
     
     def update_api_config(self, api_key: str, base_url: Optional[str] = None, 
@@ -759,6 +801,62 @@ class ConfigManager:
         config = self.get_config()
         config.workspace_config.last_opened_folder = folder_path
         self.save_config()
+    
+    def update_active_knowledge_bases(
+        self, 
+        history_kb_ids: Optional[List[str]] = None,
+        outline_kb_ids: Optional[List[str]] = None,
+        character_kb_ids: Optional[List[str]] = None
+    ) -> None:
+        """更新激活的知识库ID列表
+        
+        Args:
+            history_kb_ids: 历史知识库ID列表，None表示不更新
+            outline_kb_ids: 大纲知识库ID列表，None表示不更新
+            character_kb_ids: 人设知识库ID列表，None表示不更新
+        """
+        config = self.get_config()
+        
+        if history_kb_ids is not None:
+            config.workspace_config.active_history_kb_ids = history_kb_ids
+        if outline_kb_ids is not None:
+            config.workspace_config.active_outline_kb_ids = outline_kb_ids
+        if character_kb_ids is not None:
+            config.workspace_config.active_character_kb_ids = character_kb_ids
+        
+        self.save_config()
+    
+    def toggle_knowledge_base_activation(self, kb_type: str, kb_id: str) -> bool:
+        """切换知识库的激活状态（激活/取消激活）
+        
+        Args:
+            kb_type: 知识库类型 - "history", "outline", "character"
+            kb_id: 知识库ID
+            
+        Returns:
+            切换后的激活状态（True=已激活，False=已取消激活）
+        """
+        config = self.get_config()
+        
+        # 根据类型选择对应的列表
+        if kb_type == "history":
+            active_list = config.workspace_config.active_history_kb_ids
+        elif kb_type == "outline":
+            active_list = config.workspace_config.active_outline_kb_ids
+        elif kb_type == "character":
+            active_list = config.workspace_config.active_character_kb_ids
+        else:
+            return False
+        
+        # 切换激活状态
+        if kb_id in active_list:
+            active_list.remove(kb_id)
+            self.save_config()
+            return False
+        else:
+            active_list.append(kb_id)
+            self.save_config()
+            return True
     
     def update_workspace_config(self, workspace_config: WorkspaceConfig) -> None:
         """更新工作区配置

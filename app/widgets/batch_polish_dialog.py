@@ -6,6 +6,7 @@
 from typing import Dict, Optional
 from PySide6 import QtWidgets, QtCore, QtGui
 from app.api_client import AIClient
+from app.widgets.pulsing_label import PulsingLabel
 
 
 class BatchPolishDialog(QtWidgets.QDialog):
@@ -68,7 +69,8 @@ class BatchPolishDialog(QtWidgets.QDialog):
         self.optimize_button.setToolTip("使用AI优化和完善您的润色需求")
         optimize_layout.addWidget(self.optimize_button)
         
-        self.optimize_status = QtWidgets.QLabel("")
+        # 使用脉冲动画标签
+        self.optimize_status = PulsingLabel("")
         optimize_layout.addWidget(self.optimize_status)
         optimize_layout.addStretch()
         
@@ -132,16 +134,21 @@ class BatchPolishDialog(QtWidgets.QDialog):
             QtWidgets.QMessageBox.warning(self, "提示", "请先输入润色需求")
             return
         
-        # 禁用按钮
+        # 禁用按钮并显示脉冲动画
         self.optimize_button.setEnabled(False)
-        self.optimize_status.setText("优化中...")
+        self.optimize_status.set_pulsing_text("🔄 优化中...")
         
         try:
-            # 创建AI客户端
-            if self.config_manager:
-                client = AIClient(config_manager=self.config_manager)
+            # 复用父窗口的共享 API 客户端以优化连接池性能
+            client = None
+            parent = self.parent()
+            if parent and hasattr(parent, "_shared_api_client"):
+                client = parent._shared_api_client
+            elif parent and hasattr(parent, "_api_client"):
+                client = parent._api_client
             else:
-                client = AIClient()
+                # 降级：创建新客户端
+                client = AIClient(config_manager=self.config_manager) if self.config_manager else AIClient()
             
             # 创建优化工作线程
             self._optimize_worker = OptimizeRequirementWorker(client, requirement)
@@ -149,7 +156,7 @@ class BatchPolishDialog(QtWidgets.QDialog):
             self._optimize_worker.start()
             
         except Exception as e:
-            self.optimize_status.setText(f"❌ 失败: {str(e)}")
+            self.optimize_status.set_static_text(f"❌ 失败: {str(e)}")
             self.optimize_button.setEnabled(True)
     
     def _on_optimize_finished(self, result: Dict):
@@ -160,9 +167,9 @@ class BatchPolishDialog(QtWidgets.QDialog):
             optimized = result.get("optimized", "")
             if optimized:
                 self.requirement_input.setPlainText(optimized)
-                self.optimize_status.setText("✅ 已优化")
+                self.optimize_status.set_static_text("✅ 已优化")
         else:
-            self.optimize_status.setText(f"❌ {result.get('message', '优化失败')}")
+            self.optimize_status.set_static_text(f"❌ {result.get('message', '优化失败')}")
     
     def _start_polish(self):
         """开始润色"""

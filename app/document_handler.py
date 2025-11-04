@@ -1,13 +1,16 @@
 """
 文档处理器
-支持读写多种格式文档（txt, docx等）
+支持读写多种格式文档（txt, doc, docx, pdf, md, rtf, odt, html等）
 """
 
 import os
+import sys
 import zipfile
-from typing import Optional
+import re
+from typing import Optional, List, Tuple
 from pathlib import Path
 from xml.sax.saxutils import escape
+import tempfile
 
 
 class DocumentHandler:
@@ -31,8 +34,17 @@ class DocumentHandler:
             elif file_ext == '.docx':
                 return DocumentHandler._read_docx(file_path)
             elif file_ext == '.doc':
-                # .doc格式需要特殊处理，暂不支持
-                raise ValueError("暂不支持 .doc 格式，请转换为 .docx 格式")
+                return DocumentHandler._read_doc(file_path)
+            elif file_ext == '.pdf':
+                return DocumentHandler._read_pdf(file_path)
+            elif file_ext in ['.md', '.markdown']:
+                return DocumentHandler._read_markdown(file_path)
+            elif file_ext == '.rtf':
+                return DocumentHandler._read_rtf(file_path)
+            elif file_ext == '.odt':
+                return DocumentHandler._read_odt(file_path)
+            elif file_ext in ['.html', '.htm']:
+                return DocumentHandler._read_html(file_path)
             else:
                 # 默认当作文本文件读取
                 return DocumentHandler._read_txt(file_path)
@@ -59,6 +71,21 @@ class DocumentHandler:
                 return DocumentHandler._write_txt(file_path, content)
             elif file_ext == '.docx':
                 return DocumentHandler._write_docx(file_path, content)
+            elif file_ext == '.doc':
+                # .doc格式写入转为.docx（推荐方式）
+                print("[INFO] .doc格式写入将转换为.docx格式")
+                docx_path = file_path.rsplit('.', 1)[0] + '.docx'
+                return DocumentHandler._write_docx(docx_path, content)
+            elif file_ext == '.pdf':
+                return DocumentHandler._write_pdf(file_path, content)
+            elif file_ext in ['.md', '.markdown']:
+                return DocumentHandler._write_markdown(file_path, content)
+            elif file_ext == '.rtf':
+                return DocumentHandler._write_rtf(file_path, content)
+            elif file_ext == '.odt':
+                return DocumentHandler._write_odt(file_path, content)
+            elif file_ext in ['.html', '.htm']:
+                return DocumentHandler._write_html(file_path, content)
             else:
                 # 默认当作文本文件写入
                 return DocumentHandler._write_txt(file_path, content)
@@ -234,6 +261,340 @@ class DocumentHandler:
         return True
     
     @staticmethod
+    def _read_doc(file_path: str) -> str:
+        """读取Word文档（.doc）- 老格式
+        
+        尝试多种方法：
+        1. 使用antiword（需要外部程序）
+        2. 使用pywin32（仅Windows）
+        3. 提示转换为docx
+        """
+        try:
+            # 方法1: 尝试使用win32com（仅Windows）
+            if sys.platform == 'win32':
+                try:
+                    import win32com.client
+                    word = win32com.client.Dispatch("Word.Application")
+                    word.Visible = False
+                    doc = word.Documents.Open(os.path.abspath(file_path))
+                    text = doc.Content.Text
+                    doc.Close()
+                    word.Quit()
+                    return text
+                except Exception as e:
+                    print(f"[WARNING] 使用Word COM读取失败: {e}")
+            
+            # 方法2: 使用textract（跨平台，但需要额外依赖）
+            try:
+                import textract
+                text = textract.process(file_path).decode('utf-8')
+                return text
+            except ImportError:
+                print("[WARNING] textract未安装，无法读取.doc文件")
+            except Exception as e:
+                print(f"[WARNING] textract读取失败: {e}")
+            
+            # 如果都失败，提示用户转换
+            raise ValueError(
+                ".doc格式读取失败。建议：\n"
+                "1. 使用Word打开并另存为.docx格式\n"
+                "2. Windows系统可安装pywin32: pip install pywin32\n"
+                "3. 或安装textract: pip install textract"
+            )
+        
+        except Exception as e:
+            print(f"[ERROR] 读取.doc文件失败: {e}")
+            raise
+    
+    @staticmethod
+    def _read_pdf(file_path: str) -> str:
+        """读取PDF文档"""
+        try:
+            import PyPDF2
+            
+            text_content = []
+            with open(file_path, 'rb') as file:
+                pdf_reader = PyPDF2.PdfReader(file)
+                
+                for page_num in range(len(pdf_reader.pages)):
+                    page = pdf_reader.pages[page_num]
+                    text_content.append(page.extract_text())
+            
+            return '\n'.join(text_content)
+        
+        except ImportError:
+            raise ImportError("需要安装 PyPDF2: pip install PyPDF2")
+        except Exception as e:
+            print(f"[ERROR] 读取PDF文件失败: {e}")
+            raise
+    
+    @staticmethod
+    def _read_markdown(file_path: str) -> str:
+        """读取Markdown文档"""
+        # Markdown本质上就是文本文件
+        return DocumentHandler._read_txt(file_path)
+    
+    @staticmethod
+    def _read_rtf(file_path: str) -> str:
+        """读取RTF文档"""
+        try:
+            from striprtf.striprtf import rtf_to_text
+            
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as file:
+                rtf_content = file.read()
+            
+            return rtf_to_text(rtf_content)
+        
+        except ImportError:
+            raise ImportError("需要安装 striprtf: pip install striprtf")
+        except Exception as e:
+            print(f"[ERROR] 读取RTF文件失败: {e}")
+            raise
+    
+    @staticmethod
+    def _read_odt(file_path: str) -> str:
+        """读取OpenDocument文本（.odt）"""
+        try:
+            from odf import text, teletype
+            from odf.opendocument import load
+            
+            doc = load(file_path)
+            all_text = []
+            
+            for paragraph in doc.getElementsByType(text.P):
+                all_text.append(teletype.extractText(paragraph))
+            
+            return '\n'.join(all_text)
+        
+        except ImportError:
+            raise ImportError("需要安装 odfpy: pip install odfpy")
+        except Exception as e:
+            print(f"[ERROR] 读取ODT文件失败: {e}")
+            raise
+    
+    @staticmethod
+    def _read_html(file_path: str) -> str:
+        """读取HTML文档"""
+        try:
+            from bs4 import BeautifulSoup
+            
+            with open(file_path, 'r', encoding='utf-8') as file:
+                html_content = file.read()
+            
+            soup = BeautifulSoup(html_content, 'html.parser')
+            
+            # 移除script和style标签
+            for script in soup(["script", "style"]):
+                script.decompose()
+            
+            # 提取文本
+            text = soup.get_text()
+            
+            # 清理多余空行
+            lines = (line.strip() for line in text.splitlines())
+            text = '\n'.join(line for line in lines if line)
+            
+            return text
+        
+        except ImportError:
+            raise ImportError("需要安装 beautifulsoup4: pip install beautifulsoup4")
+        except Exception as e:
+            print(f"[ERROR] 读取HTML文件失败: {e}")
+            raise
+    
+    @staticmethod
+    def _write_pdf(file_path: str, content: str) -> bool:
+        """写入PDF文档"""
+        try:
+            from reportlab.pdfgen import canvas
+            from reportlab.lib.pagesizes import letter, A4
+            from reportlab.pdfbase import pdfmetrics
+            from reportlab.pdfbase.ttfonts import TTFont
+            from reportlab.lib.units import inch
+            
+            # 注册中文字体（尝试使用系统字体）
+            try:
+                # Windows
+                if sys.platform == 'win32':
+                    font_path = 'C:\\Windows\\Fonts\\simsun.ttc'
+                    if os.path.exists(font_path):
+                        pdfmetrics.registerFont(TTFont('SimSun', font_path))
+                        font_name = 'SimSun'
+                    else:
+                        font_name = 'Helvetica'
+                else:
+                    font_name = 'Helvetica'
+            except:
+                font_name = 'Helvetica'
+            
+            # 创建PDF
+            c = canvas.Canvas(file_path, pagesize=A4)
+            width, height = A4
+            
+            # 设置字体
+            c.setFont(font_name, 12)
+            
+            # 分页写入内容
+            lines = content.split('\n')
+            y_position = height - 1*inch
+            line_height = 16
+            
+            for line in lines:
+                if y_position < 1*inch:  # 需要换页
+                    c.showPage()
+                    c.setFont(font_name, 12)
+                    y_position = height - 1*inch
+                
+                try:
+                    c.drawString(1*inch, y_position, line)
+                except:
+                    # 如果字符编码有问题，跳过该行
+                    pass
+                
+                y_position -= line_height
+            
+            c.save()
+            return True
+        
+        except ImportError:
+            raise ImportError("需要安装 reportlab: pip install reportlab")
+        except Exception as e:
+            print(f"[ERROR] 写入PDF文件失败: {e}")
+            return False
+    
+    @staticmethod
+    def _write_markdown(file_path: str, content: str) -> bool:
+        """写入Markdown文档"""
+        # Markdown本质上就是文本文件
+        return DocumentHandler._write_txt(file_path, content)
+    
+    @staticmethod
+    def _write_rtf(file_path: str, content: str) -> bool:
+        """写入RTF文档"""
+        try:
+            from pyth.plugins.plaintext.reader import PlaintextReader
+            from pyth.plugins.rtf15.writer import Rtf15Writer
+            
+            # 读取纯文本
+            doc = PlaintextReader().read(content)
+            
+            # 写入RTF
+            with open(file_path, 'wb') as file:
+                Rtf15Writer.write(doc, file)
+            
+            return True
+        
+        except ImportError:
+            # 如果pyth不可用，使用简单的RTF格式
+            try:
+                rtf_header = r"{\rtf1\ansi\deff0"
+                rtf_footer = r"}"
+                
+                # 简单转义
+                content_escaped = content.replace('\\', '\\\\').replace('{', '\\{').replace('}', '\\}')
+                # 将换行转为RTF换行
+                content_escaped = content_escaped.replace('\n', '\\par\n')
+                
+                rtf_content = f"{rtf_header}\n{content_escaped}\n{rtf_footer}"
+                
+                with open(file_path, 'w', encoding='utf-8') as file:
+                    file.write(rtf_content)
+                
+                return True
+            except Exception as e:
+                print(f"[ERROR] 写入RTF文件失败: {e}")
+                return False
+        
+        except Exception as e:
+            print(f"[ERROR] 写入RTF文件失败: {e}")
+            return False
+    
+    @staticmethod
+    def _write_odt(file_path: str, content: str) -> bool:
+        """写入OpenDocument文本（.odt）"""
+        try:
+            from odf.opendocument import OpenDocumentText
+            from odf.text import P
+            from odf.style import Style, TextProperties, ParagraphProperties
+            from odf import style
+            
+            doc = OpenDocumentText()
+            
+            # 创建样式
+            text_style = Style(name="TextBody", family="paragraph")
+            text_style.addElement(ParagraphProperties(textalign="left"))
+            text_style.addElement(TextProperties(fontsize="12pt", fontfamily="SimSun"))
+            doc.styles.addElement(text_style)
+            
+            # 添加段落
+            for line in content.split('\n'):
+                p = P(stylename=text_style, text=line)
+                doc.text.addElement(p)
+            
+            doc.save(file_path)
+            return True
+        
+        except ImportError:
+            raise ImportError("需要安装 odfpy: pip install odfpy")
+        except Exception as e:
+            print(f"[ERROR] 写入ODT文件失败: {e}")
+            return False
+    
+    @staticmethod
+    def _write_html(file_path: str, content: str) -> bool:
+        """写入HTML文档"""
+        try:
+            # 创建简单的HTML文档
+            html_template = """<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>文档</title>
+    <style>
+        body {{
+            font-family: "Microsoft YaHei", "SimSun", sans-serif;
+            line-height: 1.6;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }}
+        p {{
+            margin-bottom: 1em;
+        }}
+    </style>
+</head>
+<body>
+{content}
+</body>
+</html>"""
+            
+            # 将文本内容转换为HTML段落
+            paragraphs = []
+            for line in content.split('\n'):
+                if line.strip():
+                    # 转义HTML特殊字符
+                    escaped_line = (line
+                        .replace('&', '&amp;')
+                        .replace('<', '&lt;')
+                        .replace('>', '&gt;')
+                        .replace('"', '&quot;'))
+                    paragraphs.append(f"    <p>{escaped_line}</p>")
+                else:
+                    paragraphs.append("    <br>")
+            
+            html_content = html_template.format(content='\n'.join(paragraphs))
+            
+            with open(file_path, 'w', encoding='utf-8') as file:
+                file.write(html_content)
+            
+            return True
+        
+        except Exception as e:
+            print(f"[ERROR] 写入HTML文件失败: {e}")
+            return False
+    
+    @staticmethod
     def create_new_document(file_path: str, template_content: str = "") -> bool:
         """创建新文档
         
@@ -261,11 +622,41 @@ class DocumentHandler:
     @staticmethod
     def get_supported_formats() -> list:
         """获取支持的文件格式"""
-        return ['.txt', '.docx']
+        return [
+            '.txt',     # 纯文本
+            '.doc',     # Word旧格式
+            '.docx',    # Word新格式
+            '.pdf',     # PDF文档
+            '.md',      # Markdown
+            '.markdown',# Markdown
+            '.rtf',     # RTF富文本
+            '.odt',     # OpenDocument
+            '.html',    # HTML
+            '.htm',     # HTML
+            '.epub'     # 电子书（ePub）
+        ]
     
     @staticmethod
     def is_supported(file_path: str) -> bool:
         """检查文件格式是否支持"""
         ext = Path(file_path).suffix.lower()
         return ext in DocumentHandler.get_supported_formats()
+    
+    @staticmethod
+    def get_format_description(ext: str) -> str:
+        """获取文件格式的描述"""
+        descriptions = {
+            '.txt': '纯文本文件',
+            '.doc': 'Word文档（旧格式）',
+            '.docx': 'Word文档',
+            '.pdf': 'PDF文档',
+            '.md': 'Markdown文档',
+            '.markdown': 'Markdown文档',
+            '.rtf': 'RTF富文本',
+            '.odt': 'OpenDocument文本',
+            '.html': 'HTML网页',
+            '.htm': 'HTML网页',
+            '.epub': 'ePub电子书'
+        }
+        return descriptions.get(ext.lower(), '未知格式')
 

@@ -73,10 +73,19 @@ class FileExplorerWidget(QtWidgets.QWidget):
         self.file_model = QtWidgets.QFileSystemModel()
         self.file_model.setRootPath("")
         
-        # 设置过滤器：只显示文件夹和可编辑文件
+        # 设置过滤器：只显示文件夹和所有支持的文件格式
         self.file_model.setNameFilters([
-            "*.txt", "*.md", "*.docx", "*.epub", 
-            "*.doc", "*.rtf", "*.odt"
+            "*.txt",      # 纯文本
+            "*.md",       # Markdown
+            "*.markdown", # Markdown
+            "*.docx",     # Word新格式
+            "*.doc",      # Word旧格式
+            "*.pdf",      # PDF文档
+            "*.rtf",      # RTF富文本
+            "*.odt",      # OpenDocument
+            "*.html",     # HTML
+            "*.htm",      # HTML
+            "*.epub"      # ePub电子书
         ])
         self.file_model.setNameFilterDisables(False)
         
@@ -268,6 +277,10 @@ class FileExplorerWidget(QtWidgets.QWidget):
             return str(path)
         else:
             return str(path.parent)
+    
+    def get_root_path(self) -> Optional[str]:
+        """获取工作空间根目录路径"""
+        return str(self._root_path) if self._root_path else None
     
     def set_theme(self, theme: Dict[str, str]):
         """设置主题"""

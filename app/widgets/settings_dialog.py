@@ -10,6 +10,8 @@ from app.style_manager import StyleManager
 from app.api_client import AIClient
 from app.config_migration import ConfigMigration
 from app.widgets.design_system import Spacing, BorderRadius, Typography, Elevation, Animation
+from app.widgets.premium_combobox import PremiumComboBox
+from app.widgets.pulsing_label import PulsingLabel
 
 
 class ElidedLabel(QtWidgets.QLabel):
@@ -106,6 +108,9 @@ class SettingsDialog(QtWidgets.QDialog):
         self._current_theme = {}
         self._stack_opacity_effect = None
         self._stack_fade_anim = None
+        
+        # 复用 API 客户端以优化连接池性能
+        self._shared_api_client = AIClient(config_manager=config_manager)
         
         self.setWindowTitle("设置")
         self.setModal(True)
@@ -313,11 +318,9 @@ class SettingsDialog(QtWidgets.QDialog):
         
         # 模型
         model_group = self._create_form_group("模型", "选择AI模型")
-        self.model_input = QtWidgets.QComboBox()
+        self.model_input = PremiumComboBox()
         self.model_input.setObjectName("ModelInput")
         self.model_input.setEditable(False)  # 改为不可编辑，只能选择预设模型
-        # 优化高度，提供更好的视觉效果
-        self.model_input.setMinimumHeight(26)
         
         # 支持的模型
         models = [
@@ -374,10 +377,9 @@ class SettingsDialog(QtWidgets.QDialog):
         
         # 向量模型
         embedding_model_label = QtWidgets.QLabel("向量模型:")
-        self.embedding_model_input = QtWidgets.QComboBox()
+        self.embedding_model_input = PremiumComboBox()
         self.embedding_model_input.setObjectName("EmbeddingModelInput")
         self.embedding_model_input.setEditable(True)
-        self.embedding_model_input.setMinimumHeight(20)
         self.embedding_model_input.addItems(["text-embedding-v4", "text-embedding-v3", "text-embedding-v2"])
         
         embedding_group.layout().addWidget(embedding_model_label)
@@ -903,7 +905,7 @@ class SettingsDialog(QtWidgets.QDialog):
         def handle_fade_out_finished() -> None:
             try:
                 self._stack_fade_anim.finished.disconnect(handle_fade_out_finished)
-            except Exception:
+            except (RuntimeError, TypeError):
                 pass
             self.settings_stack.setCurrentIndex(index)
             # 淡入
@@ -912,12 +914,16 @@ class SettingsDialog(QtWidgets.QDialog):
             self._stack_fade_anim.setEndValue(1.0)
             self._stack_fade_anim.start()
 
-        # 淡出
-        try:
-            self._stack_fade_anim.finished.disconnect()
-        except Exception:
-            pass
+        # 淡出 - 安全地断开所有现有连接
         self._stack_fade_anim.stop()
+        try:
+            # 使用 blockSignals 临时阻止信号，而不是尝试断开
+            receivers = self._stack_fade_anim.receivers(QtCore.SIGNAL("finished()"))
+            if receivers > 0:
+                self._stack_fade_anim.finished.disconnect()
+        except (RuntimeError, TypeError):
+            pass
+        
         self._stack_fade_anim.setStartValue(1.0)
         self._stack_fade_anim.setEndValue(0.0)
         self._stack_fade_anim.finished.connect(handle_fade_out_finished)
@@ -1439,7 +1445,7 @@ class SettingsDialog(QtWidgets.QDialog):
             color: {self._current_theme.get('editorForeground', '#ffffff')};
         }}
         
-        QLineEdit, QComboBox {{
+        QLineEdit {{
             background-color: {self._current_theme.get('inputBackground', '#3c3c3c')};
             border: 1px solid {self._current_theme.get('inputBorder', '#5a5a5a')};
             border-radius: {BorderRadius.SM}px;
@@ -1447,7 +1453,7 @@ class SettingsDialog(QtWidgets.QDialog):
             color: {self._current_theme.get('inputForeground', '#ffffff')};
         }}
         
-        QLineEdit:focus, QComboBox:focus {{
+        QLineEdit:focus {{
             border-color: {self._current_theme.get('focusBorder', '#007acc')};
         }}
         
@@ -1492,55 +1498,6 @@ class SettingsDialog(QtWidgets.QDialog):
         
         QCheckBox::indicator:hover {{
             border-color: {self._current_theme.get('focusBorder', '#007acc')};
-        }}
-        
-        QComboBox::drop-down {{
-            border: none;
-            background-color: transparent;
-            width: 20px;
-            padding-right: 4px;
-        }}
-        
-        QComboBox::drop-down:hover {{
-            background-color: {self._current_theme.get('buttonHoverBackground', '#1177bb')};
-        }}
-        
-        QComboBox::down-arrow {{
-            image: none;
-            border-left: 5px solid transparent;
-            border-right: 5px solid transparent;
-            border-top: 5px solid {self._current_theme.get('inputForeground', '#ffffff')};
-            margin-right: 4px;
-        }}
-        
-        QComboBox::down-arrow:hover {{
-            border-top: 5px solid {self._current_theme.get('focusBorder', '#007acc')};
-        }}
-        
-        QComboBox QAbstractItemView {{
-            background-color: {self._current_theme.get('inputBackground', '#3c3c3c')};
-            border: 1px solid {self._current_theme.get('focusBorder', '#007acc')};
-            border-radius: 3px;
-            selection-background-color: {self._current_theme.get('listActiveSelectionBackground', '#094771')};
-            selection-color: {self._current_theme.get('listActiveSelectionForeground', '#ffffff')};
-            color: {self._current_theme.get('inputForeground', '#ffffff')};
-            padding: 2px;
-            outline: none;
-        }}
-        
-        QComboBox QAbstractItemView::item {{
-            padding: 6px 12px;
-            border-radius: 2px;
-            min-height: 24px;
-        }}
-        
-        QComboBox QAbstractItemView::item:hover {{
-            background-color: {self._current_theme.get('listHoverBackground', '#2a2d2e')};
-        }}
-        
-        QComboBox QAbstractItemView::item:selected {{
-            background-color: {self._current_theme.get('listActiveSelectionBackground', '#094771')};
-            color: {self._current_theme.get('listActiveSelectionForeground', '#ffffff')};
         }}
         
         #SettingsCloseButton {{
@@ -1734,6 +1691,13 @@ class SettingsDialog(QtWidgets.QDialog):
         """
         
         self.setStyleSheet(style_sheet)
+        
+        # 为 PremiumComboBox 应用主题
+        if hasattr(self, 'model_input') and isinstance(self.model_input, PremiumComboBox):
+            self.model_input.set_theme(self._current_theme)
+        if hasattr(self, 'embedding_model_input') and isinstance(self.embedding_model_input, PremiumComboBox):
+            self.embedding_model_input.set_theme(self._current_theme)
+        
         # 同步一次状态指示（主题更新后刷新颜色）
         self._update_key_status()
 
@@ -1794,7 +1758,8 @@ class StyleEditDialog(QtWidgets.QDialog):
         self.optimize_button.setObjectName("OptimizePromptButton")
         self.optimize_button.setMinimumSize(44, 32)
         self.optimize_button.clicked.connect(self._optimize_prompt)
-        self.optimize_status = QtWidgets.QLabel("")
+        # 使用脉冲动画标签替代普通标签
+        self.optimize_status = PulsingLabel("")
         self.optimize_status.setObjectName("OptimizeStatusLabel")
         opt_layout.addWidget(self.optimize_button)
         opt_layout.addWidget(self.optimize_status)
@@ -1848,21 +1813,27 @@ class StyleEditDialog(QtWidgets.QDialog):
         if not prompt_text:
             QtWidgets.QMessageBox.warning(self, "提示", "请先输入提示词。")
             return
-        # 获取配置管理器
-        cm = None
-        parent = self.parent()
-        if parent and hasattr(parent, "config_manager"):
-            cm = parent.config_manager
-        # 禁用按钮并显示状态
+        
+        # 禁用按钮并显示脉冲动画状态
         self.optimize_button.setEnabled(False)
-        self.optimize_status.setText("优化中…")
+        self.optimize_status.set_pulsing_text("🔄 优化中...")
+        
         try:
-            client = AIClient(config_manager=cm) if cm else AIClient()
+            # 复用父窗口的共享 API 客户端以优化连接池性能
+            client = None
+            parent = self.parent()
+            if parent and hasattr(parent, "_shared_api_client"):
+                client = parent._shared_api_client
+            else:
+                # 降级：如果没有共享客户端，创建新的
+                cm = parent.config_manager if parent and hasattr(parent, "config_manager") else None
+                client = AIClient(config_manager=cm) if cm else AIClient()
+            
             self._opt_worker = OptimizePromptWorker(client, prompt_text)
             self._opt_worker.finished.connect(self._on_optimize_finished)
             self._opt_worker.start()
         except Exception as e:
-            self.optimize_status.setText(f"❌ 失败: {str(e)}")
+            self.optimize_status.set_static_text(f"❌ 失败: {str(e)}")
             self.optimize_button.setEnabled(True)
 
     def _on_optimize_finished(self, result: Dict[str, Any]):
@@ -1872,9 +1843,9 @@ class StyleEditDialog(QtWidgets.QDialog):
             optimized = result.get("optimized", "")
             if optimized:
                 self.prompt_input.setPlainText(optimized)
-            self.optimize_status.setText("✅ 已优化")
+            self.optimize_status.set_static_text("✅ 已优化")
         else:
-            self.optimize_status.setText(f"❌ {result.get('message', '优化失败')}" )
+            self.optimize_status.set_static_text(f"❌ {result.get('message', '优化失败')}")
 
     def set_theme(self, theme: Dict[str, str]):
         """设置主题"""

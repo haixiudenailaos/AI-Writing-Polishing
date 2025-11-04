@@ -36,6 +36,7 @@ class KnowledgeBase:
     metadata: Dict[str, Any]
     polish_style_id: Optional[str] = None  # 关联的润色风格提示词ID
     prediction_style_id: Optional[str] = None  # 关联的预测提示词ID
+    kb_type: str = "history"  # 知识库类型："history"(历史文本) 或 "setting"(大纲/人设)
 
 
 class VectorEmbeddingClient:
@@ -386,7 +387,19 @@ class RerankClient:
 class KnowledgeBaseManager:
     """知识库管理器"""
     
-    SUPPORTED_EXTENSIONS = {'.txt', '.md', '.docx', '.epub', '.doc', '.rtf', '.odt'}
+    SUPPORTED_EXTENSIONS = {
+        '.txt',      # 纯文本
+        '.md',       # Markdown
+        '.markdown', # Markdown
+        '.docx',     # Word新格式
+        '.doc',      # Word旧格式
+        '.pdf',      # PDF文档
+        '.rtf',      # RTF富文本
+        '.odt',      # OpenDocument
+        '.html',     # HTML
+        '.htm',      # HTML
+        '.epub'      # ePub电子书
+    }
     
     def __init__(self, storage_dir: str = "app_data/knowledge_bases"):
         """
@@ -469,7 +482,7 @@ class KnowledgeBaseManager:
     
     def read_file_content(self, file_path: str) -> Optional[str]:
         """
-        读取文件内容
+        读取文件内容（使用统一的DocumentHandler）
         
         Args:
             file_path: 文件路径
@@ -477,54 +490,11 @@ class KnowledgeBaseManager:
         Returns:
             文件内容，如果读取失败或内容无效则返回None
         """
-        path = Path(file_path)
-        suffix = path.suffix.lower()
-        
         try:
-            content = None
+            # 使用DocumentHandler统一处理所有文件格式
+            from app.document_handler import DocumentHandler
             
-            if suffix == '.txt' or suffix == '.md':
-                with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
-            
-            elif suffix == '.docx':
-                # 需要python-docx库
-                try:
-                    from docx import Document
-                    doc = Document(path)
-                    content = '\n'.join([p.text for p in doc.paragraphs])
-                except ImportError:
-                    print(f"[WARN] 无法读取 .docx 文件 {file_path}，需要安装 python-docx 库")
-                    return None
-                except Exception as e:
-                    print(f"[WARN] 读取 .docx 文件失败 {file_path}: {e}")
-                    return None
-            
-            elif suffix == '.epub':
-                # 需要ebooklib库
-                try:
-                    import ebooklib
-                    from ebooklib import epub
-                    from bs4 import BeautifulSoup
-                    
-                    book = epub.read_epub(path)
-                    content_parts = []
-                    for item in book.get_items():
-                        if item.get_type() == ebooklib.ITEM_DOCUMENT:
-                            soup = BeautifulSoup(item.get_content(), 'html.parser')
-                            content_parts.append(soup.get_text())
-                    content = '\n'.join(content_parts)
-                except ImportError:
-                    print(f"[WARN] 无法读取 .epub 文件 {file_path}，需要安装 ebooklib 和 beautifulsoup4 库")
-                    return None
-                except Exception as e:
-                    print(f"[WARN] 读取 .epub 文件失败 {file_path}: {e}")
-                    return None
-            
-            else:
-                # 其他格式尝试文本读取
-                with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
+            content = DocumentHandler.read_document(file_path)
             
             # 验证内容是否有效
             if not content or not content.strip():
@@ -538,8 +508,12 @@ class KnowledgeBaseManager:
             
             return content
                     
-        except UnicodeDecodeError as e:
-            print(f"[WARN] 文件编码错误，跳过: {file_path} - {e}")
+        except ImportError as e:
+            print(f"[WARN] 缺少必要的库，无法读取: {file_path} - {e}")
+            return None
+        except ValueError as e:
+            # 处理不支持的格式或转换建议
+            print(f"[WARN] {e}")
             return None
         except Exception as e:
             print(f"[WARN] 读取文件失败，跳过: {file_path} - {e}")
@@ -588,7 +562,8 @@ class KnowledgeBaseManager:
         chunk_size: int = 800,  # 增大分块大小以更好利用模型能力
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
         error_callback: Optional[Callable[[str], None]] = None,
-        generate_prompts: bool = True  # 是否自动生成提示词
+        generate_prompts: bool = True,  # 是否自动生成提示词
+        kb_type: str = "history"  # 知识库类型："history"(历史文本) 或 "setting"(大纲/人设)
     ) -> Optional[KnowledgeBase]:
         """
         创建知识库
@@ -743,7 +718,8 @@ class KnowledgeBaseManager:
                     'chunk_size': chunk_size
                 },
                 polish_style_id=None,
-                prediction_style_id=None
+                prediction_style_id=None,
+                kb_type=kb_type
             )
             
             # 6. 如果启用了提示词生成，则生成并保存提示词ID
@@ -761,6 +737,192 @@ class KnowledgeBaseManager:
             
             # 7. 保存知识库到用户选中的文件夹
             self._save_knowledge_base(kb, folder_path)
+            
+            if progress_callback:
+                completion_msg = f"知识库创建完成！成功处理 {successful_files} 个文件"
+                if skipped_files > 0:
+                    completion_msg += f"，跳过 {skipped_files} 个无法读取或乱码的文件"
+                progress_callback(100, 100, completion_msg)
+            
+            return kb
+            
+        except Exception as e:
+            if error_callback:
+                error_callback(f"创建知识库失败: {str(e)}")
+            return None
+    
+    def create_knowledge_base_from_files(
+        self, 
+        name: str, 
+        file_paths: List[str],
+        storage_dir: str,
+        chunk_size: int = 800,
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
+        error_callback: Optional[Callable[[str], None]] = None,
+        generate_prompts: bool = True,
+        kb_type: str = "history"
+    ) -> Optional[KnowledgeBase]:
+        """
+        从文件列表创建知识库（存储到指定目录）
+        
+        Args:
+            name: 知识库名称
+            file_paths: 源文件路径列表
+            storage_dir: 知识库存储目录（工作目录）
+            chunk_size: 文本分块大小（字符数）
+            progress_callback: 进度回调
+            error_callback: 错误回调
+            generate_prompts: 是否自动生成提示词
+            kb_type: 知识库类型
+            
+        Returns:
+            知识库对象，失败时返回None
+        """
+        if not self.embedding_client:
+            if error_callback:
+                error_callback("未配置向量化客户端，请先配置阿里云API密钥")
+            return None
+        
+        try:
+            # 1. 验证文件
+            if progress_callback:
+                progress_callback(0, 100, f"正在验证 {len(file_paths)} 个文件...")
+            
+            valid_files = []
+            for file_path in file_paths:
+                path = Path(file_path)
+                if path.exists() and path.suffix.lower() in self.SUPPORTED_EXTENSIONS:
+                    valid_files.append(file_path)
+            
+            if not valid_files:
+                if error_callback:
+                    error_callback("没有找到有效的文件")
+                return None
+            
+            # 2. 读取和分块
+            if progress_callback:
+                progress_callback(10, 100, f"正在读取 {len(valid_files)} 个文件...")
+            
+            chunks = []
+            chunk_metadata = []
+            successful_files = 0
+            skipped_files = 0
+            
+            for i, file_path in enumerate(valid_files):
+                content = self.read_file_content(file_path)
+                
+                if content is None:
+                    skipped_files += 1
+                    if progress_callback:
+                        progress = 10 + int((i + 1) / len(valid_files) * 30)
+                        progress_callback(
+                            progress, 100, 
+                            f"已处理 {i + 1}/{len(valid_files)} 个文件（跳过 {skipped_files} 个），生成 {len(chunks)} 个文本块"
+                        )
+                    continue
+                
+                # 分块
+                file_chunks = self._chunk_text(content, chunk_size)
+                
+                if file_chunks:
+                    successful_files += 1
+                    for j, chunk in enumerate(file_chunks):
+                        chunks.append(chunk)
+                        chunk_metadata.append({
+                            'file_path': file_path,
+                            'chunk_index': j,
+                            'total_chunks': len(file_chunks)
+                        })
+                
+                if progress_callback:
+                    progress = 10 + int((i + 1) / len(valid_files) * 30)
+                    progress_callback(
+                        progress, 100, 
+                        f"已处理 {i + 1}/{len(valid_files)} 个文件（成功 {successful_files}，跳过 {skipped_files}），生成 {len(chunks)} 个文本块"
+                    )
+            
+            if not chunks:
+                if error_callback:
+                    error_callback(f"所有文件都无法读取或内容无效（共 {len(valid_files)} 个文件），无法创建知识库")
+                return None
+            
+            # 3. 向量化
+            if progress_callback:
+                progress_callback(40, 100, "正在进行向量化处理...")
+            
+            def vector_progress(current, total, message):
+                progress = 40 + int(current / total * 50)
+                if progress_callback:
+                    progress_callback(progress, 100, message)
+            
+            try:
+                vectors = self.embedding_client.embed_batch(
+                    chunks, 
+                    progress_callback=vector_progress,
+                    batch_size=10
+                )
+                
+                failed_count = sum(1 for v in vectors if not v)
+                if failed_count > 0:
+                    if error_callback:
+                        error_callback(f"有 {failed_count} 个文本块向量化失败，已跳过")
+                
+            except Exception as e:
+                if error_callback:
+                    error_callback(f"批量向量化失败: {str(e)}")
+                return None
+            
+            # 4. 创建文档对象
+            documents = []
+            skipped_count = 0
+            for i, (chunk, vector, metadata) in enumerate(zip(chunks, vectors, chunk_metadata)):
+                if not vector:
+                    skipped_count += 1
+                    continue
+                
+                doc_id = self._generate_doc_id(chunk, metadata['file_path'])
+                doc = VectorDocument(
+                    id=doc_id,
+                    file_path=metadata['file_path'],
+                    content=chunk,
+                    vector=vector,
+                    metadata=metadata,
+                    created_at=datetime.now().isoformat()
+                )
+                documents.append(doc)
+            
+            if skipped_count > 0:
+                print(f"[WARN] 跳过了 {skipped_count} 个向量化失败的文档")
+            
+            if not documents:
+                if error_callback:
+                    error_callback("所有文档向量化失败，无法创建知识库")
+                return None
+            
+            # 5. 创建知识库
+            kb_id = self._generate_kb_id(name)
+            kb = KnowledgeBase(
+                id=kb_id,
+                name=name,
+                root_path=storage_dir,  # 存储目录设为工作目录
+                documents=documents,
+                created_at=datetime.now().isoformat(),
+                updated_at=datetime.now().isoformat(),
+                metadata={
+                    'total_files': len(valid_files),
+                    'successful_files': successful_files,
+                    'skipped_files': skipped_files,
+                    'total_chunks': len(chunks),
+                    'chunk_size': chunk_size,
+                    'source_files': [str(Path(f).name) for f in valid_files]  # 记录源文件名
+                },
+                polish_style_id=None,
+                prediction_style_id=None,
+                kb_type=kb_type
+            )
+            
+            # 6. 保存知识库到工作目录
+            self._save_knowledge_base(kb, storage_dir)
             
             if progress_callback:
                 completion_msg = f"知识库创建完成！成功处理 {successful_files} 个文件"
@@ -879,7 +1041,7 @@ class KnowledgeBaseManager:
                 reference_file = self.storage_dir / f"{kb.id}.json"
                 self.storage_dir.mkdir(parents=True, exist_ok=True)
                 
-                # 保存引用信息
+                # 保存引用信息（重要：必须包含kb_type以便UI正确识别）
                 reference_data = {
                     "id": kb.id,
                     "name": kb.name,
@@ -887,7 +1049,8 @@ class KnowledgeBaseManager:
                     "kb_file_path": str(kb_file.resolve()),
                     "created_at": kb.created_at,
                     "updated_at": kb.updated_at,
-                    "metadata": kb.metadata
+                    "metadata": kb.metadata,
+                    "kb_type": kb.kb_type  # 添加kb_type字段，确保UI能正确识别知识库类型
                 }
                 
                 with open(reference_file, 'w', encoding='utf-8') as f:
@@ -935,10 +1098,20 @@ class KnowledgeBaseManager:
         kb_dict['documents'] = documents
         return KnowledgeBase(**kb_dict)
     
-    def list_knowledge_bases(self) -> List[Dict[str, Any]]:
-        """列出所有知识库"""
-        kb_list = []
+    def list_knowledge_bases(self, kb_type: Optional[str] = None, workspace_dir: Optional[str] = None) -> List[Dict[str, Any]]:
+        """列出所有知识库
         
+        Args:
+            kb_type: 过滤知识库类型（可选），"history"或"setting"，None表示返回所有
+            workspace_dir: 工作目录路径（可选），如果提供则会扫描该目录中的知识库文件
+            
+        Returns:
+            知识库列表
+        """
+        kb_list = []
+        kb_ids_seen = set()  # 用于去重
+        
+        # 1. 扫描默认存储目录（引用文件）
         for kb_file in self.storage_dir.glob("*.json"):
             try:
                 with open(kb_file, 'r', encoding='utf-8') as f:
@@ -947,27 +1120,89 @@ class KnowledgeBaseManager:
                 # 检查是否是引用文件
                 if "kb_file_path" in data:
                     # 引用文件格式
-                    kb_list.append({
+                    actual_kb_path = Path(data.get('kb_file_path', ''))
+                    
+                    # 检查实际的知识库文件是否存在
+                    if not actual_kb_path.exists():
+                        print(f"[WARN] 知识库文件不存在: {actual_kb_path}，删除引用文件: {kb_file}")
+                        try:
+                            kb_file.unlink()  # 删除引用文件
+                        except Exception as e:
+                            print(f"[ERROR] 删除引用文件失败: {e}")
+                        continue  # 跳过这个知识库
+                    
+                    kb_info = {
                         'id': data['id'],
                         'name': data['name'],
                         'created_at': data['created_at'],
                         'root_path': data.get('root_path', ''),
                         'kb_file_path': data.get('kb_file_path', ''),
-                        'total_documents': data.get('metadata', {}).get('total_chunks', 0)
-                    })
+                        'total_documents': data.get('metadata', {}).get('total_chunks', 0),
+                        'kb_type': data.get('kb_type', 'history'),  # 默认为history保持向后兼容
+                        'metadata': data.get('metadata', {})  # 包含完整的metadata（包括sub_type）
+                    }
                 else:
-                    # 旧格式知识库文件
-                    kb_list.append({
+                    # 旧格式知识库文件（直接存储在默认目录）
+                    # 这种情况下，kb_file本身就是知识库文件，已经存在
+                    kb_info = {
                         'id': data['id'],
                         'name': data['name'],
                         'created_at': data['created_at'],
                         'root_path': data.get('root_path', ''),
                         'kb_file_path': str(kb_file),
-                        'total_documents': len(data.get('documents', []))
-                    })
+                        'total_documents': len(data.get('documents', [])),
+                        'kb_type': data.get('kb_type', 'history'),  # 默认为history保持向后兼容
+                        'metadata': data.get('metadata', {})  # 包含完整的metadata
+                    }
+                
+                # 根据类型过滤
+                if kb_type is None or kb_info['kb_type'] == kb_type:
+                    kb_list.append(kb_info)
+                    kb_ids_seen.add(kb_info['id'])
+                    
             except Exception as e:
                 print(f"[WARN] 读取知识库文件失败 {kb_file}: {e}")
                 continue
+        
+        # 2. 如果提供了工作目录，扫描工作目录中的.knowledge_base_*.json文件
+        if workspace_dir:
+            workspace_path = Path(workspace_dir)
+            if workspace_path.exists() and workspace_path.is_dir():
+                try:
+                    for kb_file in workspace_path.glob(".knowledge_base_*.json"):
+                        try:
+                            with open(kb_file, 'r', encoding='utf-8') as f:
+                                data = json.load(f)
+                            
+                            kb_id = data.get('id')
+                            # 如果已经从默认目录读取过这个知识库，跳过
+                            if kb_id and kb_id in kb_ids_seen:
+                                continue
+                            
+                            # 从完整知识库文件中提取信息
+                            kb_info = {
+                                'id': data['id'],
+                                'name': data['name'],
+                                'created_at': data['created_at'],
+                                'root_path': data.get('root_path', ''),
+                                'kb_file_path': str(kb_file.resolve()),
+                                'total_documents': len(data.get('documents', [])),
+                                'kb_type': data.get('kb_type', 'history'),
+                                'metadata': data.get('metadata', {})
+                            }
+                            
+                            # 根据类型过滤
+                            if kb_type is None or kb_info['kb_type'] == kb_type:
+                                kb_list.append(kb_info)
+                                kb_ids_seen.add(kb_info['id'])
+                                print(f"[INFO] 从工作目录发现知识库: {kb_info['name']} (类型: {kb_info['kb_type']})")
+                                
+                        except Exception as e:
+                            print(f"[WARN] 读取工作目录知识库文件失败 {kb_file}: {e}")
+                            continue
+                            
+                except Exception as e:
+                    print(f"[WARN] 扫描工作目录知识库失败: {e}")
         
         return kb_list
     

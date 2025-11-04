@@ -77,11 +77,15 @@ def check_requirements():
         "api_client.py",
         "config_manager.py",
         "knowledge_base.py",
-        "prompt_generator.py",  # 新增：提示词生成器
+        "prompt_generator.py",  # 提示词生成器
         "text_processor.py",
         "style_manager.py",
         "request_queue_manager.py",
         "document_handler.py",
+        "format_converter.py",  # V1.3: 文件格式转换器
+        "window_geometry.py",   # V1.3: 窗口几何管理器
+        "auto_save_manager.py", # V1.3: 自动保存管理器
+        "auto_export_manager.py", # V1.3: 自动导出管理器
     ]
     
     app_dir = project_root / "app"
@@ -104,9 +108,20 @@ def check_requirements():
     widgets_modules = [
         "settings_dialog.py",
         "knowledge_base_dialog.py",
-        "prediction_toggle.py",  # 新增：剧情预测开关
+        "knowledge_base_manager_dialog.py",  # V1.3: 知识库管理对话框
+        "knowledge_base_status_indicator.py", # V1.3: 知识库状态指示器
+        "prediction_toggle.py",  # 剧情预测开关
         "polish_result_panel.py",
         "loading_overlay.py",
+        "premium_combobox.py",   # V1.3: 高级下拉框组件
+        "pulsing_label.py",      # V1.3: 脉冲标签组件
+        "splash_screen.py",      # V1.3: 启动画面
+        "file_explorer.py",      # V1.3: 文件浏览器
+        "batch_polish_dialog.py", # V1.3: 批量润色对话框
+        "design_system.py",      # V1.3: 设计系统
+        "theme_manager.py",      # V1.3: 主题管理器
+        "ui_enhancer.py",        # V1.3: UI增强器
+        "output_list.py",        # V1.3: 输出列表
     ]
     
     widgets_dir = app_dir / "widgets"
@@ -357,18 +372,35 @@ def run_basic_tests():
     print("✅ 基本验证完成")
     print("⚠️  提醒: 请手动测试以下功能:")
     print("   1. 程序能否正常启动")
+    print("      - V1.3: 启动画面（SplashScreen）显示正常")
+    print("      - V1.3: 窗口几何（位置/大小）恢复正常")
+    print("      - V1.3: 多屏幕支持和DPI自适应")
     print("   2. 知识库创建和管理")
+    print("      - V1.3: 知识库管理对话框功能完整")
+    print("      - V1.3: 知识库状态指示器实时更新")
+    print("      - 历史知识库、大纲、人设三种类型")
     print("   3. 剧情预测功能:")
     print("      - 普通剧情预测（temperature=0.85）")
     print("      - 知识库增强预测（temperature=0.8）")
     print("      - 创意导向提示词生成")
     print("      - 时间序权重增强（recency_boost_strength=0.3）")
     print("   4. 文本润色功能")
+    print("      - V1.3: 批量润色对话框")
+    print("      - V1.3: 润色结果面板")
     print("   5. 导入导出功能")
-    print("   6. 配置管理:")
+    print("      - V1.3: 文件格式转换（FormatConverter）")
+    print("      - V1.3: 自动保存管理器")
+    print("      - V1.3: 自动导出管理器")
+    print("   6. UI/UX 增强:")
+    print("      - V1.3: 高级下拉框（PremiumComboBox）")
+    print("      - V1.3: 脉冲标签动画效果")
+    print("      - V1.3: 文件浏览器改进")
+    print("      - V1.3: 主题管理器和设计系统")
+    print("   7. 配置管理:")
     print("      - hybrid_search_alpha 参数")
     print("      - recency_boost_strength 参数")
     print("      - prediction_enabled 开关")
+    print("      - V1.3: 窗口状态保存与恢复")
     return True
 
 def show_results():
@@ -430,20 +462,33 @@ def show_results():
     print("  2. 再测试无控制台版本，验证用户体验")
     print("  3. 在干净的Windows环境中进行最终测试")
     print("  4. 验证所有业务流程和文件I/O操作")
-    print("\n🆕 新功能测试重点 (2025-10-31更新):")
-    print("  ✨ 创意导向的剧情预测:")
-    print("     - 验证生成的内容是否有创意和戏剧张力")
-    print("     - 检查提示词是否包含创意引导原则和技巧工具箱")
-    print("     - 测试温度参数调整效果（0.85 / 0.8）")
-    print("  📊 时间序权重增强:")
-    print("     - 创建测试知识库，导入多个章节")
-    print("     - 验证离当前位置越近的文档权重越高")
-    print("     - 测试不同 recency_boost_strength 值的效果")
-    print("     - 确认控制台输出权重增强的调试信息")
-    print("  ⚙️ 配置项验证:")
-    print("     - 检查 app_config.json 中的 kb_config.recency_boost_strength")
-    print("     - 验证配置修改后功能正常响应")
-    print("     - 测试配置为0时权重增强被禁用")
+    print("\n🆕 V1.3 新功能测试重点:")
+    print("  ✨ 用户体验增强:")
+    print("     - 启动画面（ModernSplashScreen）显示流畅")
+    print("     - 窗口几何管理（多屏幕、DPI自适应）")
+    print("     - 知识库管理对话框（统一管理入口）")
+    print("     - 知识库状态指示器（实时状态反馈）")
+    print("     - 批量润色对话框和结果面板")
+    print("  🎨 UI组件升级:")
+    print("     - PremiumComboBox（高级下拉框）")
+    print("     - PulsingLabel（脉冲标签动画）")
+    print("     - 改进的文件浏览器和输出列表")
+    print("     - 统一的设计系统和主题管理")
+    print("  💾 文件处理增强:")
+    print("     - FormatConverter（多格式转换）")
+    print("     - AutoSaveManager（自动保存）")
+    print("     - AutoExportManager（自动导出）")
+    print("     - 批量文件处理功能")
+    print("  🧠 智能功能优化:")
+    print("     - 创意导向的剧情预测（temperature=0.85/0.8）")
+    print("     - 时间序权重增强（recency_boost_strength）")
+    print("     - 混合搜索优化（hybrid_search_alpha）")
+    print("     - 三种知识库类型支持（历史/大纲/人设）")
+    print("  ⚙️ 配置管理:")
+    print("     - app_config.json 配置项完整性")
+    print("     - 窗口状态持久化（window_state）")
+    print("     - 知识库配置（kb_config）")
+    print("     - API 调用参数优化")
 
 def main():
     """主函数"""
@@ -454,9 +499,10 @@ def main():
     
     args = parser.parse_args()
     
-    print_header("字见润新 - 统一构建脚本")
+    print_header("字见润新 V1.3 - 统一构建脚本")
     print("🎯 目标: 同时生成带控制台和无控制台两个版本")
     print("💡 优势: 一次构建，两个版本，完整验证")
+    print("📦 版本: V1.3 - 用户体验与功能增强版")
     
     try:
         # 检查构建环境
@@ -493,17 +539,33 @@ def main():
         # 显示结果
         show_results()
         
-        print("\n🎉 统一构建成功!")
+        print("\n🎉 V1.3 统一构建成功!")
         print("\n📋 后续建议:")
         print("  1. 在目标环境中测试两个版本的功能完整性")
         print("  2. 验证所有业务流程和文件操作")
         print("  3. 检查程序在干净环境中的可移植性")
         print("  4. 对比两个版本确保功能一致性")
-        print("\n💡 新增模块说明:")
-        print("  • app/prompt_generator.py - 提示词生成器（创意导向）")
-        print("  • knowledge_base._apply_recency_boost - 时间序权重增强方法")
-        print("  • config_manager.recency_boost_strength - 权重增强配置项")
-        print("  • 优化后的API调用提示词和温度参数")
+        print("\n💡 V1.3 新增模块说明:")
+        print("  核心模块:")
+        print("    • app/format_converter.py - 文件格式转换器（支持多种文档格式互转）")
+        print("    • app/window_geometry.py - 窗口几何管理器（多屏幕+DPI自适应）")
+        print("    • app/auto_save_manager.py - 自动保存管理器")
+        print("    • app/auto_export_manager.py - 自动导出管理器")
+        print("  UI组件:")
+        print("    • app/widgets/splash_screen.py - 启动画面（现代化启动体验）")
+        print("    • app/widgets/knowledge_base_manager_dialog.py - 知识库管理对话框")
+        print("    • app/widgets/knowledge_base_status_indicator.py - 知识库状态指示器")
+        print("    • app/widgets/premium_combobox.py - 高级下拉框组件")
+        print("    • app/widgets/pulsing_label.py - 脉冲标签动画组件")
+        print("    • app/widgets/batch_polish_dialog.py - 批量润色对话框")
+        print("    • app/widgets/file_explorer.py - 改进的文件浏览器")
+        print("    • app/widgets/design_system.py - 统一设计系统")
+        print("    • app/widgets/theme_manager.py - 主题管理器")
+        print("  已有模块优化:")
+        print("    • app/prompt_generator.py - 提示词生成器（创意导向）")
+        print("    • app/knowledge_base.py - 时间序权重增强（_apply_recency_boost）")
+        print("    • app/config_manager.py - 配置管理增强（窗口状态、知识库配置）")
+        print("    • app/api_client.py - API调用优化（温度参数、提示词）")
         
         return 0
         

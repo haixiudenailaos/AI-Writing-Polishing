@@ -40,6 +40,7 @@ from app.widgets.batch_polish_dialog import BatchPolishDialog
 from app.processors.async_polish_processor import AsyncPolishProcessor, HeartbeatManager
 from app.request_queue_manager import RequestQueueManager, RequestType, RequestPriority
 from app.config_manager import PolishStyle
+from app.window_geometry import WindowGeometryManager
 
 OUTPUT_ITEM_ROLE = QtCore.Qt.UserRole + 1
 
@@ -456,9 +457,17 @@ class MainWindow(QtWidgets.QMainWindow):
         # 初始化知识库管理器
         self._kb_manager = KnowledgeBaseManager()
         
-        # 当前激活的知识库（用于剧情预测）
-        self._active_kb = None
-        self._active_kb_id = None
+        # 当前激活的历史文本知识库列表（用于预测，支持多个）
+        self._active_history_kbs = []  # 知识库对象列表
+        self._active_history_kb_ids = []  # 知识库ID列表
+        
+        # 当前激活的大纲知识库列表（用于润色和预测，支持多个）
+        self._active_outline_kbs = []  # 知识库对象列表
+        self._active_outline_kb_ids = []  # 知识库ID列表
+        
+        # 当前激活的人设知识库列表（用于润色和预测，支持多个）
+        self._active_character_kbs = []  # 知识库对象列表
+        self._active_character_kb_ids = []  # 知识库ID列表
         
         # 重排序客户端（用于知识库增强预测）
         self._rerank_client = None
@@ -512,14 +521,27 @@ class MainWindow(QtWidgets.QMainWindow):
         self._theme_manager.themeChanged.connect(self._apply_theme)
         self._theme_manager.emitCurrentTheme()
         
-        # 自动加载上次打开的文件夹
-        self._load_last_opened_folder()
-        
-        # 加载剧情预测开关状态
-        self._load_prediction_config()
-        
-        # 【性能优化】程序启动后立即预热API连接，确保最快响应
-        self._warmup_api_connection()
+        # 【性能优化】延迟加载耗时操作，先显示UI
+        # 使用QTimer延迟100ms后执行，确保窗口先显示
+        QtCore.QTimer.singleShot(100, self._delayed_initialization)
+    
+    def _delayed_initialization(self):
+        """延迟初始化（在UI显示后执行耗时操作）"""
+        try:
+            # 自动加载上次打开的文件夹
+            self._load_last_opened_folder()
+            
+            # 加载剧情预测开关状态
+            self._load_prediction_config()
+            
+            # 【性能优化】程序启动后立即预热API连接，确保最快响应
+            self._warmup_api_connection()
+            
+            print("[INFO] 延迟初始化完成")
+        except Exception as e:
+            print(f"[ERROR] 延迟初始化失败: {e}")
+            import traceback
+            traceback.print_exc()
     
     def on_editor_line_count_changed(self, changed_line: int, delta: int) -> None:
         """处理编辑器行数变化 - 调整润色结果面板中的行号
@@ -651,21 +673,31 @@ class MainWindow(QtWidgets.QMainWindow):
         import_folder_button.setCursor(QtGui.QCursor(QtCore.Qt.PointingHandCursor))
         import_folder_button.clicked.connect(self._on_import_folder)
         
-        # 新建知识库按钮
-        create_kb_button = QtWidgets.QPushButton("新建知识库")
-        create_kb_button.setObjectName("CreateKBButton")
-        create_kb_button.setCursor(QtGui.QCursor(QtCore.Qt.PointingHandCursor))
-        create_kb_button.clicked.connect(self._on_create_knowledge_base)
+        # 知识库选项按钮（带下拉菜单）
+        kb_options_button = QtWidgets.QPushButton("知识库选项 ▼")
+        kb_options_button.setObjectName("KBOptionsButton")
+        kb_options_button.setCursor(QtGui.QCursor(QtCore.Qt.PointingHandCursor))
         
-        # 知识库选择按钮
-        select_kb_button = QtWidgets.QPushButton("选择知识库")
-        select_kb_button.setObjectName("SelectKBButton")
-        select_kb_button.setCursor(QtGui.QCursor(QtCore.Qt.PointingHandCursor))
-        select_kb_button.clicked.connect(self._on_select_knowledge_base)
+        # 创建知识库选项菜单
+        kb_menu = QtWidgets.QMenu(kb_options_button)
+        kb_menu.setObjectName("KBOptionsMenu")
         
-        # 当前知识库状态标签
-        kb_status_label = QtWidgets.QLabel("知识库: 未激活")
-        kb_status_label.setObjectName("KBStatusLabel")
+        # 添加菜单项
+        history_action = kb_menu.addAction("📚 历史知识库")
+        history_action.triggered.connect(lambda: self._on_open_kb_manager("history"))
+        
+        outline_action = kb_menu.addAction("📋 大纲")
+        outline_action.triggered.connect(lambda: self._on_open_kb_manager("outline"))
+        
+        character_action = kb_menu.addAction("👤 人设")
+        character_action.triggered.connect(lambda: self._on_open_kb_manager("character"))
+        
+        kb_options_button.setMenu(kb_menu)
+        
+        # 知识库状态指示器（紧凑型）
+        from app.widgets.knowledge_base_status_indicator import KnowledgeBaseStatusIndicator
+        kb_status_indicator = KnowledgeBaseStatusIndicator()
+        kb_status_indicator.clicked.connect(lambda: self._on_open_kb_manager("history"))  # 点击默认打开历史知识库管理
         
         # 一键润色按钮
         batch_polish_button = QtWidgets.QPushButton("✨ 一键润色")
@@ -710,9 +742,8 @@ class MainWindow(QtWidgets.QMainWindow):
         header_layout.addWidget(title_label)
         header_layout.addSpacing(12)
         header_layout.addWidget(import_folder_button, 0)
-        header_layout.addWidget(create_kb_button, 0)
-        header_layout.addWidget(select_kb_button, 0)
-        header_layout.addWidget(kb_status_label, 0)
+        header_layout.addWidget(kb_options_button, 0)
+        header_layout.addWidget(kb_status_indicator, 0)
         header_layout.addWidget(batch_polish_button, 0)
         header_layout.addWidget(theme_selector, 0)
         header_layout.addWidget(settings_button, 0)
@@ -785,7 +816,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._quick_reject_button = quick_reject_button
         self._message_label = message_label
         self._overlay = overlay
-        self._kb_status_label = kb_status_label
+        self._kb_status_indicator = kb_status_indicator
 
         self.setCentralWidget(central_container)
 
@@ -846,6 +877,10 @@ class MainWindow(QtWidgets.QMainWindow):
         
         # 加载保存的导出配置
         self._load_export_config()
+        
+        # 【性能优化】将知识库加载改为异步后台加载，不阻塞UI显示
+        # 延迟500ms后再加载知识库，确保UI完全显示
+        QtCore.QTimer.singleShot(500, self._async_load_knowledge_bases)
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]
         super().resizeEvent(event)
@@ -963,14 +998,30 @@ class MainWindow(QtWidgets.QMainWindow):
             self,
             "手动导出文本",
             default_path,
-            "文本文件 (*.txt);;所有文件 (*)"
+            "文本文件 (*.txt);;"
+            "Word文档 (*.docx);;"
+            "Markdown (*.md);;"
+            "HTML (*.html);;"
+            "PDF (*.pdf);;"
+            "RTF (*.rtf);;"
+            "OpenDocument (*.odt);;"
+            "所有文件 (*)"
         )
         
         if file_path:
             try:
-                with open(file_path, 'w', encoding='utf-8') as f:
-                    f.write(text)
-                self._show_message(f"文本已成功导出到: {Path(file_path).name}", duration_ms=3000, is_error=False)
+                # 使用DocumentHandler支持多种格式导出
+                success = DocumentHandler.write_document(file_path, text)
+                if success:
+                    file_ext = Path(file_path).suffix.lower()
+                    format_name = DocumentHandler.get_format_description(file_ext)
+                    self._show_message(
+                        f"文本已成功导出为{format_name}: {Path(file_path).name}", 
+                        duration_ms=3000, 
+                        is_error=False
+                    )
+                else:
+                    self._show_message(f"导出失败", duration_ms=3000, is_error=True)
             except Exception as e:
                 self._show_message(f"导出失败: {str(e)}", duration_ms=3000, is_error=True)
     
@@ -984,6 +1035,214 @@ class MainWindow(QtWidgets.QMainWindow):
             
             if export_config.auto_export_enabled:
                 self._auto_export_manager.set_enabled(True)
+    
+    def _async_load_knowledge_bases(self):
+        """异步加载知识库（在后台线程执行，不阻塞UI）"""
+        from PySide6.QtCore import QThread
+        
+        class KnowledgeBaseLoadWorker(QThread):
+            """知识库加载工作线程"""
+            load_completed = QtCore.Signal(dict)  # 加载完成信号
+            progress_update = QtCore.Signal(str)  # 进度更新信号
+            
+            def __init__(self, config_manager, kb_manager, parent=None):
+                super().__init__(parent)
+                self.config_manager = config_manager
+                self.kb_manager = kb_manager
+            
+            def run(self):
+                """执行知识库加载"""
+                try:
+                    workspace_config = self.config_manager.get_workspace_config()
+                    result = {
+                        'history_kbs': [],
+                        'history_kb_ids': [],
+                        'outline_kbs': [],
+                        'outline_kb_ids': [],
+                        'character_kbs': [],
+                        'character_kb_ids': [],
+                        'has_kbs': False
+                    }
+                    
+                    # 加载历史知识库列表
+                    self.progress_update.emit("正在加载历史知识库...")
+                    for kb_id in workspace_config.active_history_kb_ids:
+                        try:
+                            kb = self.kb_manager.load_knowledge_base(kb_id)
+                            if kb:
+                                result['history_kbs'].append(kb)
+                                result['history_kb_ids'].append(kb_id)
+                                print(f"[INFO] 已加载历史知识库: {kb.name}")
+                        except Exception as e:
+                            print(f"[WARN] 加载历史知识库失败 ({kb_id}): {e}")
+                    
+                    # 加载大纲知识库列表
+                    self.progress_update.emit("正在加载大纲知识库...")
+                    for kb_id in workspace_config.active_outline_kb_ids:
+                        try:
+                            kb = self.kb_manager.load_knowledge_base(kb_id)
+                            if kb:
+                                result['outline_kbs'].append(kb)
+                                result['outline_kb_ids'].append(kb_id)
+                                print(f"[INFO] 已加载大纲知识库: {kb.name}")
+                        except Exception as e:
+                            print(f"[WARN] 加载大纲知识库失败 ({kb_id}): {e}")
+                    
+                    # 加载人设知识库列表
+                    self.progress_update.emit("正在加载人设知识库...")
+                    for kb_id in workspace_config.active_character_kb_ids:
+                        try:
+                            kb = self.kb_manager.load_knowledge_base(kb_id)
+                            if kb:
+                                result['character_kbs'].append(kb)
+                                result['character_kb_ids'].append(kb_id)
+                                print(f"[INFO] 已加载人设知识库: {kb.name}")
+                        except Exception as e:
+                            print(f"[WARN] 加载人设知识库失败 ({kb_id}): {e}")
+                    
+                    # 检查是否有知识库被加载
+                    result['has_kbs'] = any([
+                        result['history_kbs'],
+                        result['outline_kbs'],
+                        result['character_kbs']
+                    ])
+                    
+                    self.progress_update.emit("知识库加载完成")
+                    self.load_completed.emit(result)
+                    
+                except Exception as e:
+                    print(f"[ERROR] 知识库加载失败: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    self.load_completed.emit({
+                        'history_kbs': [],
+                        'history_kb_ids': [],
+                        'outline_kbs': [],
+                        'outline_kb_ids': [],
+                        'character_kbs': [],
+                        'character_kb_ids': [],
+                        'has_kbs': False
+                    })
+        
+        # 创建并启动加载线程
+        print("[INFO] 开始异步加载知识库...")
+        self._kb_load_worker = KnowledgeBaseLoadWorker(
+            self._config_manager,
+            self._kb_manager,
+            self
+        )
+        self._kb_load_worker.progress_update.connect(self._on_kb_load_progress)
+        self._kb_load_worker.load_completed.connect(self._on_kb_load_completed)
+        self._kb_load_worker.start()
+    
+    def _on_kb_load_progress(self, message: str):
+        """知识库加载进度更新"""
+        print(f"[INFO] {message}")
+    
+    def _on_kb_load_completed(self, result: dict):
+        """知识库加载完成回调"""
+        try:
+            # 更新知识库列表
+            self._active_history_kbs = result['history_kbs']
+            self._active_history_kb_ids = result['history_kb_ids']
+            self._active_outline_kbs = result['outline_kbs']
+            self._active_outline_kb_ids = result['outline_kb_ids']
+            self._active_character_kbs = result['character_kbs']
+            self._active_character_kb_ids = result['character_kb_ids']
+            
+            # 如果有任何知识库被激活，配置向量化客户端和重排客户端
+            if result['has_kbs']:
+                # 配置向量化客户端
+                api_config = self._config_manager.get_api_config()
+                if api_config.embedding_api_key:
+                    self._kb_manager.set_embedding_client(
+                        api_config.embedding_api_key,
+                        api_config.embedding_model
+                    )
+                    print(f"[INFO] 已配置知识库向量化客户端")
+                else:
+                    print(f"[WARN] 未配置向量化API密钥，知识库检索功能将不可用")
+                
+                # 初始化重排客户端
+                self._initialize_rerank_client()
+            
+            # 更新UI状态
+            self._update_kb_status_label()
+            
+            total_kbs = len(self._active_history_kbs) + len(self._active_outline_kbs) + len(self._active_character_kbs)
+            if total_kbs > 0:
+                print(f"[INFO] 知识库加载完成，共 {total_kbs} 个知识库")
+                # 简短提示
+                self._show_message(f"知识库加载完成（{total_kbs}个）", duration_ms=2000, is_error=False)
+            else:
+                print(f"[INFO] 未发现需要加载的知识库")
+            
+        except Exception as e:
+            print(f"[ERROR] 处理知识库加载结果失败: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def _load_active_knowledge_bases(self) -> None:
+        """加载上次激活的知识库（支持多个）- 同步版本（保留用于兼容性）"""
+        workspace_config = self._config_manager.get_workspace_config()
+        
+        # 加载历史知识库列表
+        self._active_history_kbs = []
+        self._active_history_kb_ids = []
+        for kb_id in workspace_config.active_history_kb_ids:
+            try:
+                kb = self._kb_manager.load_knowledge_base(kb_id)
+                if kb:
+                    self._active_history_kbs.append(kb)
+                    self._active_history_kb_ids.append(kb_id)
+                    print(f"[INFO] 已加载历史知识库: {kb.name}")
+            except Exception as e:
+                print(f"[WARN] 加载历史知识库失败 ({kb_id}): {e}")
+        
+        # 加载大纲知识库列表
+        self._active_outline_kbs = []
+        self._active_outline_kb_ids = []
+        for kb_id in workspace_config.active_outline_kb_ids:
+            try:
+                kb = self._kb_manager.load_knowledge_base(kb_id)
+                if kb:
+                    self._active_outline_kbs.append(kb)
+                    self._active_outline_kb_ids.append(kb_id)
+                    print(f"[INFO] 已加载大纲知识库: {kb.name}")
+            except Exception as e:
+                print(f"[WARN] 加载大纲知识库失败 ({kb_id}): {e}")
+        
+        # 加载人设知识库列表
+        self._active_character_kbs = []
+        self._active_character_kb_ids = []
+        for kb_id in workspace_config.active_character_kb_ids:
+            try:
+                kb = self._kb_manager.load_knowledge_base(kb_id)
+                if kb:
+                    self._active_character_kbs.append(kb)
+                    self._active_character_kb_ids.append(kb_id)
+                    print(f"[INFO] 已加载人设知识库: {kb.name}")
+            except Exception as e:
+                print(f"[WARN] 加载人设知识库失败 ({kb_id}): {e}")
+        
+        # 如果有任何知识库被激活，配置向量化客户端和重排客户端
+        if any([self._active_history_kbs, self._active_outline_kbs, self._active_character_kbs]):
+            # 配置向量化客户端
+            api_config = self._config_manager.get_api_config()
+            if api_config.embedding_api_key:
+                self._kb_manager.set_embedding_client(
+                    api_config.embedding_api_key,
+                    api_config.embedding_model
+                )
+                print(f"[INFO] 已配置知识库向量化客户端")
+            else:
+                print(f"[WARN] 未配置向量化API密钥，知识库检索功能将不可用")
+            
+            # 初始化重排客户端
+            self._initialize_rerank_client()
+        
+        # 更新UI状态
+        self._update_kb_status_label()
     
     def _on_editor_text_changed_for_export(self) -> None:
         """编辑器文本变化时，请求实时导出"""
@@ -1036,8 +1295,152 @@ class MainWindow(QtWidgets.QMainWindow):
             self._config_manager.update_last_opened_folder(folder_path)
             self._show_message(f"已导入文件夹: {Path(folder_path).name}", duration_ms=2000, is_error=False)
     
+    def _on_open_kb_manager(self, kb_type: str) -> None:
+        """打开知识库管理对话框
+        
+        Args:
+            kb_type: 知识库类型 - "history", "outline", "character"
+        """
+        from app.widgets.knowledge_base_manager_dialog import KnowledgeBaseTypeDialog
+        
+        # 获取当前激活的知识库ID列表
+        active_kb_ids = []
+        if kb_type == "history":
+            active_kb_ids = self._active_history_kb_ids.copy()
+        elif kb_type == "outline":
+            active_kb_ids = self._active_outline_kb_ids.copy()
+        elif kb_type == "character":
+            active_kb_ids = self._active_character_kb_ids.copy()
+        
+        # 获取工作空间根目录（用于存储知识库文件）
+        workspace_dir = self.file_explorer.get_root_path()
+        
+        # 创建对话框
+        dialog = KnowledgeBaseTypeDialog(
+            kb_type=kb_type,
+            kb_manager=self._kb_manager,
+            active_kb_ids=active_kb_ids,
+            workspace_dir=workspace_dir,
+            parent=self
+        )
+        
+        # 应用主题
+        if hasattr(self, '_current_theme'):
+            dialog.set_theme(self._current_theme)
+        
+        # 显示对话框
+        result = dialog.exec()
+        
+        # 获取更新后的激活状态（支持多个）
+        new_active_kb_ids = dialog.get_active_kb_ids()
+        
+        # 更新激活的知识库
+        if set(new_active_kb_ids) != set(active_kb_ids):
+            # 激活状态发生变化
+            # 加载激活的知识库
+            new_kbs = []
+            for kb_id in new_active_kb_ids:
+                try:
+                    kb = self._kb_manager.load_knowledge_base(kb_id)
+                    if kb:
+                        new_kbs.append(kb)
+                except Exception as e:
+                    print(f"[WARN] 加载知识库失败 ({kb_id}): {e}")
+            
+            # 更新内部状态
+            if kb_type == "history":
+                self._active_history_kbs = new_kbs
+                self._active_history_kb_ids = new_active_kb_ids
+                # 保存到配置
+                self._config_manager.update_active_knowledge_bases(history_kb_ids=new_active_kb_ids)
+            elif kb_type == "outline":
+                self._active_outline_kbs = new_kbs
+                self._active_outline_kb_ids = new_active_kb_ids
+                # 保存到配置
+                self._config_manager.update_active_knowledge_bases(outline_kb_ids=new_active_kb_ids)
+            elif kb_type == "character":
+                self._active_character_kbs = new_kbs
+                self._active_character_kb_ids = new_active_kb_ids
+                # 保存到配置
+                self._config_manager.update_active_knowledge_bases(character_kb_ids=new_active_kb_ids)
+            
+            # 配置向量化客户端（用于知识库检索）
+            if new_kbs:
+                api_config = self._config_manager.get_api_config()
+                if api_config.embedding_api_key:
+                    self._kb_manager.set_embedding_client(
+                        api_config.embedding_api_key,
+                        api_config.embedding_model
+                    )
+                    print(f"[INFO] 已配置知识库向量化客户端")
+                else:
+                    print(f"[WARN] 未配置向量化API密钥，知识库检索功能将不可用")
+                
+                # 初始化重排客户端
+                self._initialize_rerank_client()
+                
+                # 加载知识库关联的提示词（历史知识库才有）
+                if kb_type == "history":
+                    for kb in new_kbs:
+                        self._load_kb_prompts(kb)
+                
+                kb_names = [kb.name for kb in new_kbs]
+                self._show_message(f"已激活 {len(new_kbs)} 个知识库: {', '.join(kb_names)}", duration_ms=3000, is_error=False)
+            else:
+                self._show_message("已取消激活所有知识库", duration_ms=2000, is_error=False)
+            
+            # 更新UI状态显示
+            self._update_kb_status_label()
+    
+    def _initialize_rerank_client(self):
+        """初始化重排序客户端"""
+        api_config = self._config_manager.get_api_config()
+        if api_config.embedding_api_key:
+            from app.knowledge_base import RerankClient
+            try:
+                self._rerank_client = RerankClient(
+                    api_key=api_config.embedding_api_key,
+                    model="qwen3-rerank"
+                )
+                print(f"[INFO] 重排客户端初始化成功")
+            except Exception as e:
+                print(f"[WARN] 重排客户端初始化失败: {e}")
+                self._rerank_client = None
+        else:
+            print(f"[WARN] 未配置阿里云API密钥，无法初始化重排客户端")
+            self._rerank_client = None
+    
+    def _update_kb_status_label(self):
+        """更新知识库状态指示器（支持多个知识库）"""
+        if not hasattr(self, '_kb_status_indicator') or not self._kb_status_indicator:
+            return
+        
+        # 获取知识库名称（支持多个，用逗号分隔）
+        history_name = None
+        if self._active_history_kbs:
+            names = [kb.name for kb in self._active_history_kbs]
+            history_name = ', '.join(names) if names else None
+        
+        outline_name = None
+        if self._active_outline_kbs:
+            names = [kb.name for kb in self._active_outline_kbs]
+            outline_name = ', '.join(names) if names else None
+        
+        character_name = None
+        if self._active_character_kbs:
+            names = [kb.name for kb in self._active_character_kbs]
+            character_name = ', '.join(names) if names else None
+        
+        # 更新指示器状态
+        self._kb_status_indicator.update_status(
+            history_kb_name=history_name,
+            outline_kb_name=outline_name,
+            character_kb_name=character_name,
+            rerank_enabled=bool(self._rerank_client)
+        )
+    
     def _on_create_knowledge_base(self) -> None:
-        """创建知识库"""
+        """创建知识库（保留用于向后兼容）"""
         # 获取当前选中的文件夹
         current_folder = self.file_explorer.get_current_folder()
         if not current_folder:
@@ -1085,14 +1488,66 @@ class MainWindow(QtWidgets.QMainWindow):
             if reply == QtWidgets.QMessageBox.No:
                 return
         
-        # 输入知识库名称
-        kb_name, ok = QtWidgets.QInputDialog.getText(
-            self, "创建知识库",
-            "请输入知识库名称:"
-        )
+        # 创建自定义对话框来输入名称和选择类型
+        input_dialog = QtWidgets.QDialog(self)
+        input_dialog.setWindowTitle("创建知识库")
+        input_dialog.setModal(True)
         
-        if not ok or not kb_name.strip():
+        layout = QtWidgets.QVBoxLayout(input_dialog)
+        
+        # 名称输入
+        layout.addWidget(QtWidgets.QLabel("知识库名称:"))
+        name_input = QtWidgets.QLineEdit()
+        layout.addWidget(name_input)
+        
+        # 类型选择
+        layout.addWidget(QtWidgets.QLabel("\n知识库类型:"))
+        type_group = QtWidgets.QButtonGroup(input_dialog)
+        
+        history_radio = QtWidgets.QRadioButton("历史文本库（仅用于剧情预测）")
+        setting_radio = QtWidgets.QRadioButton("大纲/人设库（用于润色和预测）")
+        history_radio.setChecked(True)  # 默认选中历史文本
+        
+        type_group.addButton(history_radio)
+        type_group.addButton(setting_radio)
+        
+        layout.addWidget(history_radio)
+        layout.addWidget(setting_radio)
+        
+        # 说明文字
+        info_label = QtWidgets.QLabel(
+            "\n说明：\n"
+            "• 历史文本库：存储已写作的历史章节，仅用于剧情预测参考\n"
+            "• 大纲/人设库：存储大纲、人设、世界观等设定，用于润色和预测"
+        )
+        info_label.setWordWrap(True)
+        info_label.setStyleSheet("color: gray; font-size: 11px;")
+        layout.addWidget(info_label)
+        
+        # 按钮
+        button_layout = QtWidgets.QHBoxLayout()
+        ok_button = QtWidgets.QPushButton("确定")
+        cancel_button = QtWidgets.QPushButton("取消")
+        button_layout.addWidget(ok_button)
+        button_layout.addWidget(cancel_button)
+        layout.addLayout(button_layout)
+        
+        ok_button.clicked.connect(input_dialog.accept)
+        cancel_button.clicked.connect(input_dialog.reject)
+        
+        if input_dialog.exec() != QtWidgets.QDialog.Accepted:
             return
+        
+        kb_name = name_input.text().strip()
+        if not kb_name:
+            QtWidgets.QMessageBox.warning(
+                self, "错误",
+                "知识库名称不能为空。"
+            )
+            return
+        
+        # 获取选择的类型
+        kb_type = "setting" if setting_radio.isChecked() else "history"
         
         # 创建进度对话框
         progress_dialog = KnowledgeBaseProgressDialog(self)
@@ -1104,12 +1559,13 @@ class MainWindow(QtWidgets.QMainWindow):
         from PySide6.QtCore import QThread
         
         class KBCreationWorker(QThread):
-            def __init__(self, kb_manager, name, folder, dialog):
+            def __init__(self, kb_manager, name, folder, dialog, kb_type):
                 super().__init__()
                 self.kb_manager = kb_manager
                 self.name = name
                 self.folder = folder
                 self.dialog = dialog
+                self.kb_type = kb_type
                 self.result = None
             
             def run(self):
@@ -1117,10 +1573,11 @@ class MainWindow(QtWidgets.QMainWindow):
                     name=self.name,
                     folder_path=self.folder,
                     progress_callback=lambda c, t, m: self.dialog.update_progress(c, t, m),
-                    error_callback=lambda e: self.dialog.log(f"错误: {e}")
+                    error_callback=lambda e: self.dialog.log(f"错误: {e}"),
+                    kb_type=self.kb_type
                 )
         
-        worker = KBCreationWorker(self._kb_manager, kb_name.strip(), current_folder, progress_dialog)
+        worker = KBCreationWorker(self._kb_manager, kb_name, current_folder, progress_dialog, kb_type)
         worker.finished.connect(lambda: self._on_kb_creation_finished(worker, progress_dialog))
         worker.start()
         
@@ -1265,43 +1722,53 @@ class MainWindow(QtWidgets.QMainWindow):
             traceback.print_exc()
     
     def _activate_knowledge_base(self, kb):
-        """激活指定的知识库
+        """激活指定的知识库（已废弃 - 仅用于向后兼容）
+        
+        注意：此方法已废弃，新代码请使用 _on_open_kb_manager() 和多知识库管理
         
         Args:
             kb: 知识库对象
         """
-        self._active_kb = kb
-        self._active_kb_id = kb.id
+        print(f"[WARN] 调用了已废弃的方法 _activate_knowledge_base，请使用新的多知识库管理功能")
         
-        # 初始化重排客户端（用于知识库增强预测）
+        # 兼容旧代码：将单个知识库转换为列表格式
+        if kb.kb_type == "history":
+            self._active_history_kbs = [kb]
+            self._active_history_kb_ids = [kb.id]
+            print(f"[INFO] 已激活历史文本知识库: {kb.name}")
+        else:  # "setting"
+            # 检查元数据中的sub_type
+            sub_type = kb.metadata.get('sub_type', '')
+            if sub_type == "outline":
+                self._active_outline_kbs = [kb]
+                self._active_outline_kb_ids = [kb.id]
+                print(f"[INFO] 已激活大纲知识库: {kb.name}")
+            elif sub_type == "character":
+                self._active_character_kbs = [kb]
+                self._active_character_kb_ids = [kb.id]
+                print(f"[INFO] 已激活人设知识库: {kb.name}")
+            else:
+                # 向后兼容：旧的setting类型统一作为大纲处理
+                self._active_outline_kbs = [kb]
+                self._active_outline_kb_ids = [kb.id]
+                print(f"[INFO] 已激活大纲/人设知识库: {kb.name}")
+        
+        # 配置向量化客户端（用于知识库检索）
         api_config = self._config_manager.get_api_config()
         if api_config.embedding_api_key:
-            # 移除 "not self._rerank_client" 的检查，确保每次都尝试初始化
-            from app.knowledge_base import RerankClient
-            try:
-                self._rerank_client = RerankClient(
-                    api_key=api_config.embedding_api_key,
-                    model="gte-rerank-v2"  # 使用阿里云的重排序模型
-                )
-                print(f"[INFO] 重排序客户端已初始化，模型: gte-rerank-v2")
-                print(f"[INFO] 重排客户端对象: {self._rerank_client}")
-            except Exception as e:
-                print(f"[ERROR] 重排序客户端初始化失败: {e}")
-                import traceback
-                traceback.print_exc()
-                self._rerank_client = None
+            self._kb_manager.set_embedding_client(
+                api_config.embedding_api_key,
+                api_config.embedding_model
+            )
+            print(f"[INFO] 已配置知识库向量化客户端")
         else:
-            print(f"[WARN] 未配置阿里云API密钥，无法初始化重排客户端")
-            self._rerank_client = None
+            print(f"[WARN] 未配置向量化API密钥，知识库检索功能将不可用")
+        
+        # 初始化重排客户端
+        self._initialize_rerank_client()
         
         # 自动加载知识库关联的提示词
         self._load_kb_prompts(kb)
-        
-        # 更新UI状态
-        if hasattr(self, '_kb_status_label') and self._kb_status_label:
-            rerank_status = "已启用" if self._rerank_client else "未启用"
-            self._kb_status_label.setText(f"知识库: {kb.name} (重排:{rerank_status})")
-            print(f"[INFO] 已激活知识库: {kb.name}, 文档数: {len(kb.documents)}, 重排模型: {rerank_status}")
     
     def _load_kb_prompts(self, kb):
         """加载知识库关联的提示词
@@ -1350,8 +1817,9 @@ class MainWindow(QtWidgets.QMainWindow):
     
     def _on_select_knowledge_base(self):
         """选择知识库"""
-        # 获取所有知识库列表
-        kb_list = self._kb_manager.list_knowledge_bases()
+        # 获取所有知识库列表（包含当前工作目录的知识库）
+        workspace_dir = self.file_explorer.get_root_path()
+        kb_list = self._kb_manager.list_knowledge_bases(workspace_dir=workspace_dir)
         
         if not kb_list:
             QtWidgets.QMessageBox.information(
@@ -1371,8 +1839,9 @@ class MainWindow(QtWidgets.QMainWindow):
         
         # 添加说明标签
         info_label = QtWidgets.QLabel(
-            "选择一个知识库用于增强剧情预测功能。\n"
-            "激活知识库后，AI将基于知识库内容生成更准确的预测。"
+            "选择知识库用于增强AI功能：\n"
+            "• 历史文本库：仅用于剧情预测，提供历史剧情参考\n"
+            "• 大纲/人设库：用于润色和预测，提供人设、大纲等设定参考"
         )
         info_label.setWordWrap(True)
         layout.addWidget(info_label)
@@ -1382,9 +1851,20 @@ class MainWindow(QtWidgets.QMainWindow):
         list_widget.setObjectName("KBListWidget")
         
         for kb_info in kb_list:
-            item_text = f"{kb_info['name']} ({kb_info['total_documents']} 个文档)"
-            if self._active_kb_id and kb_info['id'] == self._active_kb_id:
+            # 获取知识库类型
+            kb_type = kb_info.get('kb_type', 'history')
+            kb_type_label = "大纲/人设" if kb_type == "setting" else "历史文本"
+            
+            item_text = f"[{kb_type_label}] {kb_info['name']} ({kb_info['total_documents']} 个文档)"
+            
+            # 检查是否激活
+            is_active = False
+            if kb_type == "setting" and self._active_setting_kb_id and kb_info['id'] == self._active_setting_kb_id:
                 item_text += " [当前激活]"
+                is_active = True
+            elif kb_type == "history" and self._active_history_kb_id and kb_info['id'] == self._active_history_kb_id:
+                item_text += " [当前激活]"
+                is_active = True
             
             item = QtWidgets.QListWidgetItem(item_text)
             item.setData(QtCore.Qt.UserRole, kb_info)
@@ -1466,10 +1946,16 @@ class MainWindow(QtWidgets.QMainWindow):
             # 激活知识库
             self._activate_knowledge_base(kb)
             
+            # 根据知识库类型显示不同的提示
+            if kb.kb_type == "setting":
+                message = f"已激活大纲/人设知识库: {kb.name}\n\n润色和预测功能将基于此知识库中的设定生成内容。"
+            else:
+                message = f"已激活历史文本知识库: {kb.name}\n\n剧情预测功能将基于此知识库中的历史剧情生成内容。"
+            
             QtWidgets.QMessageBox.information(
                 dialog,
                 "成功",
-                f"已激活知识库: {kb.name}\n\n剧情预测功能将基于此知识库生成内容。"
+                message
             )
             
             dialog.accept()
@@ -1482,22 +1968,90 @@ class MainWindow(QtWidgets.QMainWindow):
             )
     
     def _on_deactivate_kb(self, dialog):
-        """停用知识库"""
-        self._active_kb = None
-        self._active_kb_id = None
+        """停用知识库（已废弃 - 仅用于向后兼容）
         
-        # 更新UI状态
-        if hasattr(self, '_kb_status_label') and self._kb_status_label:
-            self._kb_status_label.setText("知识库: 未激活")
-        
+        注意：此方法已废弃，新版本使用知识库管理对话框来激活/停用
+        """
+        print(f"[WARN] 调用了已废弃的方法 _on_deactivate_kb，请使用新的知识库管理功能")
         QtWidgets.QMessageBox.information(
             dialog,
-            "成功",
-            "已停用知识库。\n\n剧情预测功能将使用普通模式。"
+            "提示",
+            "此功能已更新，请使用顶部的知识库管理按钮来管理知识库。"
         )
+        return
         
-        print(f"[INFO] 已停用知识库")
-        dialog.accept()
+        # 以下代码已废弃，保留用于参考
+        # 检查是否有激活的知识库
+        has_history = len(self._active_history_kbs) > 0
+        has_setting = len(self._active_outline_kbs) > 0 or len(self._active_character_kbs) > 0
+        
+        if not has_history and not has_setting:
+            QtWidgets.QMessageBox.information(
+                dialog,
+                "提示",
+                "当前没有激活的知识库。"
+            )
+            return
+        
+        # 创建选择对话框
+        deactivate_dialog = QtWidgets.QDialog(dialog)
+        deactivate_dialog.setWindowTitle("停用知识库")
+        deactivate_dialog.setModal(True)
+        
+        layout = QtWidgets.QVBoxLayout(deactivate_dialog)
+        
+        layout.addWidget(QtWidgets.QLabel("请选择要停用的知识库："))
+        
+        # 添加复选框
+        history_checkbox = QtWidgets.QCheckBox(f"历史文本库: {self._active_history_kb.name if has_history else '未激活'}")
+        history_checkbox.setEnabled(has_history)
+        if has_history:
+            history_checkbox.setChecked(True)
+        layout.addWidget(history_checkbox)
+        
+        setting_checkbox = QtWidgets.QCheckBox(f"大纲/人设库: {self._active_setting_kb.name if has_setting else '未激活'}")
+        setting_checkbox.setEnabled(has_setting)
+        if has_setting:
+            setting_checkbox.setChecked(True)
+        layout.addWidget(setting_checkbox)
+        
+        # 添加按钮
+        button_layout = QtWidgets.QHBoxLayout()
+        ok_button = QtWidgets.QPushButton("确定")
+        cancel_button = QtWidgets.QPushButton("取消")
+        button_layout.addWidget(ok_button)
+        button_layout.addWidget(cancel_button)
+        layout.addLayout(button_layout)
+        
+        ok_button.clicked.connect(deactivate_dialog.accept)
+        cancel_button.clicked.connect(deactivate_dialog.reject)
+        
+        if deactivate_dialog.exec() == QtWidgets.QDialog.Accepted:
+            # 停用选中的知识库
+            if history_checkbox.isChecked() and has_history:
+                self._active_history_kb = None
+                self._active_history_kb_id = None
+                print(f"[INFO] 已停用历史文本知识库")
+            
+            if setting_checkbox.isChecked() and has_setting:
+                self._active_setting_kb = None
+                self._active_setting_kb_id = None
+                print(f"[INFO] 已停用大纲/人设知识库")
+            
+            # 更新UI状态
+            if hasattr(self, '_kb_status_label') and self._kb_status_label:
+                history_kb_name = self._active_history_kb.name if self._active_history_kb else "未激活"
+                setting_kb_name = self._active_setting_kb.name if self._active_setting_kb else "未激活"
+                rerank_status = "已启用" if self._rerank_client else "未启用"
+                self._kb_status_label.setText(f"历史文本库: {history_kb_name} | 大纲/人设库: {setting_kb_name} (重排:{rerank_status})")
+            
+            QtWidgets.QMessageBox.information(
+                dialog,
+                "成功",
+                "已停用选中的知识库。"
+            )
+            
+            dialog.accept()
     
     def _polish_text_with_context_async(self, context_lines: list[str], target_line: str, line_number: int) -> str:
         """使用上下文异步润色文本（使用请求队列避免与预测冲突）"""
@@ -1526,10 +2080,37 @@ class MainWindow(QtWidgets.QMainWindow):
             _context_lines = context_lines
             _style_prompt = style_prompt
             
-            # 定义执行函数 - 直接调用API
+            # 定义执行函数 - 根据是否有大纲/人设知识库选择调用方法
             def execute_polish():
                 print(f"[DEBUG] 队列中执行润色: {_target_line[:30]}", flush=True)
-                return self._api_client.polish_last_line(_context_lines, _target_line, _style_prompt or "")
+                # 检查是否有激活的大纲或人设知识库
+                has_outline = bool(self._active_outline_kbs)
+                has_character = bool(self._active_character_kbs)
+                
+                # 如果有大纲或人设知识库，使用知识库增强润色
+                if has_outline or has_character:
+                    kb_names = []
+                    if has_outline:
+                        outline_names = [kb.name for kb in self._active_outline_kbs]
+                        kb_names.extend([f"大纲:{name}" for name in outline_names])
+                    if has_character:
+                        character_names = [kb.name for kb in self._active_character_kbs]
+                        kb_names.extend([f"人设:{name}" for name in character_names])
+                    
+                    print(f"[DEBUG] 使用知识库增强润色: {', '.join(kb_names)}")
+                    return self._api_client.polish_last_line_with_kb(
+                        context_lines=_context_lines,
+                        target_line=_target_line,
+                        kb_manager=self._kb_manager,
+                        outline_kbs=self._active_outline_kbs if has_outline else None,
+                        character_kbs=self._active_character_kbs if has_character else None,
+                        rerank_client=self._rerank_client,
+                        style_prompt=_style_prompt or ""
+                    )
+                else:
+                    # 普通润色
+                    print(f"[DEBUG] 使用普通润色（无激活的知识库）")
+                    return self._api_client.polish_last_line(_context_lines, _target_line, _style_prompt or "")
             
             # 定义成功回调（在主线程中执行）
             def on_success(polished_text):
@@ -1744,14 +2325,34 @@ class MainWindow(QtWidgets.QMainWindow):
         # 优先使用知识库的预测提示词，如果不存在则使用当前选中的风格
         style_prompt = None
         
-        if self._active_kb and self._active_kb.prediction_style_id:
-            # 尝试获取知识库的预测提示词
-            prediction_style = self._style_manager.get_style_by_id(self._active_kb.prediction_style_id)
-            if prediction_style:
-                style_prompt = prediction_style.prompt
-                print(f"[INFO] 使用知识库预测提示词: {prediction_style.name}")
-            else:
-                print(f"[WARN] 知识库预测提示词不存在，回退到当前选中的风格")
+        # 优先查找历史文本知识库的预测提示词（因为历史文本专用于预测）
+        # 使用第一个激活的历史知识库
+        if self._active_history_kbs and len(self._active_history_kbs) > 0:
+            first_history_kb = self._active_history_kbs[0]
+            if first_history_kb.prediction_style_id:
+                # 尝试获取历史文本知识库的预测提示词
+                prediction_style = self._style_manager.get_style_by_id(first_history_kb.prediction_style_id)
+                if prediction_style:
+                    style_prompt = prediction_style.prompt
+                    print(f"[INFO] 使用历史文本知识库预测提示词: {prediction_style.name}")
+        
+        # 如果没有，查找大纲知识库的预测提示词
+        if not style_prompt and self._active_outline_kbs and len(self._active_outline_kbs) > 0:
+            first_outline_kb = self._active_outline_kbs[0]
+            if first_outline_kb.prediction_style_id:
+                prediction_style = self._style_manager.get_style_by_id(first_outline_kb.prediction_style_id)
+                if prediction_style:
+                    style_prompt = prediction_style.prompt
+                    print(f"[INFO] 使用大纲知识库预测提示词: {prediction_style.name}")
+        
+        # 如果还是没有，查找人设知识库的预测提示词
+        if not style_prompt and self._active_character_kbs and len(self._active_character_kbs) > 0:
+            first_character_kb = self._active_character_kbs[0]
+            if first_character_kb.prediction_style_id:
+                prediction_style = self._style_manager.get_style_by_id(first_character_kb.prediction_style_id)
+                if prediction_style:
+                    style_prompt = prediction_style.prompt
+                    print(f"[INFO] 使用人设知识库预测提示词: {prediction_style.name}")
         
         # 如果没有知识库预测提示词，使用当前选中的风格组合提示词
         if not style_prompt:
@@ -1769,14 +2370,29 @@ class MainWindow(QtWidgets.QMainWindow):
         _full_text = full_text
         _style_prompt = style_prompt
         
-        # 检查是否有活动的知识库
-        has_kb = self._active_kb is not None and self._active_kb.documents
+        # 检查是否有活动的知识库（三种，支持多个）
+        # 使用第一个激活的知识库进行预测
+        active_history_kb = self._active_history_kbs[0] if self._active_history_kbs and len(self._active_history_kbs) > 0 else None
+        active_outline_kb = self._active_outline_kbs[0] if self._active_outline_kbs and len(self._active_outline_kbs) > 0 else None
+        active_character_kb = self._active_character_kbs[0] if self._active_character_kbs and len(self._active_character_kbs) > 0 else None
+        
+        has_history_kb = active_history_kb is not None and active_history_kb.documents
+        has_outline_kb = active_outline_kb is not None and active_outline_kb.documents
+        has_character_kb = active_character_kb is not None and active_character_kb.documents
+        has_any_kb = has_history_kb or has_outline_kb or has_character_kb
         
         # 定义执行函数
         def execute_prediction():
-            if has_kb:
+            if has_any_kb:
                 # 使用知识库增强预测
-                print(f"[INFO] 使用知识库增强预测，知识库: {self._active_kb.name}")
+                kb_info = []
+                if has_history_kb:
+                    kb_info.append(f"历史文本: {active_history_kb.name}")
+                if has_outline_kb:
+                    kb_info.append(f"大纲: {active_outline_kb.name}")
+                if has_character_kb:
+                    kb_info.append(f"人设: {active_character_kb.name}")
+                print(f"[INFO] 使用知识库增强预测，{', '.join(kb_info)}")
                 print(f"[INFO] 重排客户端状态: {'已初始化' if self._rerank_client else '未初始化'}")
                 if self._rerank_client:
                     print(f"[INFO] 重排客户端对象: {self._rerank_client}")
@@ -1795,11 +2411,13 @@ class MainWindow(QtWidgets.QMainWindow):
                 
                 print(f"[INFO] 准备调用知识库增强预测，上下文长度: {len(current_context)}")
                 
-                # 调用知识库增强预测
+                # 调用知识库增强预测（传入三个知识库：历史、大纲、人设）
                 return self._api_client.predict_plot_continuation_with_kb(
                     current_context=current_context,
                     kb_manager=self._kb_manager,
-                    kb=self._active_kb,
+                    history_kb=active_history_kb,
+                    outline_kb=active_outline_kb,
+                    character_kb=active_character_kb,
                     rerank_client=self._rerank_client,
                     style_prompt=_style_prompt or "",
                     min_relevance_threshold=0.25  # 使用用户调整后的阈值
@@ -1840,7 +2458,7 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         
         # 显示简短提示，不干扰用户
-        if has_kb:
+        if has_any_kb:
             self._show_message(f"知识库增强预测已加入队列...", duration_ms=1500, is_error=False)
         else:
             self._show_message("剧情预测已加入队列...", duration_ms=1500, is_error=False)
@@ -2280,13 +2898,34 @@ class MainWindow(QtWidgets.QMainWindow):
                     "  border-radius: 3px;",
                     f"  background-color: {theme.get('panelBackground', '#2d2d30')};",
                     "}",
-                    "QLabel#KBStatusLabel {",
-                    "  font-size: 11px;",
-                    f"  color: {theme.get('accent', '#007acc')};",
-                    "  padding: 4px 8px;",
+                    "QPushButton#KBOptionsButton {",
+                    f"  background-color: {theme['buttonBackground']};",
+                    f"  color: {theme['buttonForeground']};",
                     f"  border: 1px solid {theme['borderColor']};",
+                    "  border-radius: 4px;",
+                    "  padding: 6px 14px;",
+                    "}",
+                    "QPushButton#KBOptionsButton:hover {",
+                    f"  background-color: {theme['accent']};",
+                    "  color: #ffffff;",
+                    "}",
+                    "QPushButton#KBOptionsButton::menu-indicator {",
+                    "  width: 0px;",  # 隐藏默认的下拉箭头
+                    "}",
+                    "QMenu#KBOptionsMenu {",
+                    f"  background-color: {theme['panelBackground']};",
+                    f"  color: {theme['foreground']};",
+                    f"  border: 1px solid {theme['borderColor']};",
+                    "  border-radius: 4px;",
+                    "  padding: 4px;",
+                    "}",
+                    "QMenu#KBOptionsMenu::item {",
+                    "  padding: 8px 20px;",
                     "  border-radius: 3px;",
-                    f"  background-color: {theme.get('panelBackground', '#2d2d30')};",
+                    "}",
+                    "QMenu#KBOptionsMenu::item:selected {",
+                    f"  background-color: {theme['accent']};",
+                    "  color: #ffffff;",
                     "}",
                     "QPushButton#QuickRejectButton {",
                     f"  background-color: {theme.get('buttonBackground', '#3a3d41')};",
@@ -2362,6 +3001,10 @@ class MainWindow(QtWidgets.QMainWindow):
         # 更新剧情预测开关主题
         if hasattr(self, 'prediction_toggle'):
             self.prediction_toggle.set_theme(self._current_theme)
+        
+        # 更新知识库状态指示器主题
+        if hasattr(self, '_kb_status_indicator'):
+            self._kb_status_indicator.set_theme(self._current_theme)
 
     def _show_message(self, message: str, duration_ms: int, is_error: bool) -> None:
         if self._message_label is None:
@@ -2649,6 +3292,12 @@ class MainWindow(QtWidgets.QMainWindow):
     def closeEvent(self, event):
         """窗口关闭事件 - 清理资源"""
         try:
+            # 优先保存窗口几何
+            try:
+                if hasattr(self, '_geometry_manager') and self._geometry_manager:
+                    self._geometry_manager.save_geometry(self)
+            except Exception:
+                pass
             # 停止自动保存管理器
             if hasattr(self, '_auto_save_manager') and self._auto_save_manager:
                 self._auto_save_manager.stop()
@@ -2680,14 +3329,48 @@ class MainWindow(QtWidgets.QMainWindow):
 
 def main() -> None:
     load_dotenv()
+    # 高DPI支持（Qt6 已默认启用，仅设置缩放策略）
+    try:
+        QtCore.QCoreApplication.setHighDpiScaleFactorRoundingPolicy(
+            QtCore.Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+        )
+    except Exception:
+        pass
+
     app = QtWidgets.QApplication(sys.argv)
     app.setApplicationName("字见润新")
     app.setOrganizationName("GuojiRunse")
     app.setStyle("Fusion")
-
+    
+    # 【性能优化】显示启动画面，改善用户体验
+    from app.widgets.splash_screen import ModernSplashScreen
+    splash = ModernSplashScreen()
+    splash.show()
+    splash.update_progress(20, "正在初始化界面...")
+    app.processEvents()
+    
+    # 创建主窗口（但先不显示）
+    splash.update_progress(50, "正在加载组件...")
     window = MainWindow()
-    window.show()
-
+    # 应用窗口几何（恢复上次位置大小或按专业默认值）
+    try:
+        window._geometry_manager = WindowGeometryManager(window._config_manager)
+        window._geometry_manager.apply_initial_geometry(window)
+    except Exception:
+        pass
+    
+    # 完成初始化
+    splash.update_progress(90, "准备就绪...")
+    app.processEvents()
+    
+    # 延迟200ms后显示主窗口并关闭启动画面
+    def show_main_window():
+        splash.update_progress(100, "启动完成")
+        window.show()
+        splash.close()
+    
+    QtCore.QTimer.singleShot(200, show_main_window)
+    
     sys.exit(app.exec())
 
 

@@ -9,6 +9,8 @@ from .theme_manager import ThemeManager
 from .settings_dialog import SettingsDialog
 from .file_explorer import FileExplorerWidget
 from .knowledge_base_dialog import KnowledgeBaseProgressDialog
+from .knowledge_base_manager_dialog import KnowledgeBaseTypeDialog, KnowledgeBaseItemWidget
+from .knowledge_base_status_indicator import KnowledgeBaseStatusIndicator
 from .batch_polish_dialog import BatchPolishDialog
 from .polish_result_panel import PolishResultPanel
 from .ui_enhancer import UnderlineRenderer
@@ -21,10 +23,16 @@ __all__ = [
     'SettingsDialog',
     'FileExplorerWidget',
     'KnowledgeBaseProgressDialog',
+    'KnowledgeBaseTypeDialog',
+    'KnowledgeBaseItemWidget',
+    'KnowledgeBaseStatusIndicator',
     'BatchPolishDialog',
     'PolishResultPanel',
     'UnderlineRenderer',
 ]
+
+
+
 
 
 

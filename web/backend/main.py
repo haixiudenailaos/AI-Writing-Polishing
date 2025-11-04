@@ -4,6 +4,7 @@ FastAPI 后端主程序
 """
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
@@ -41,6 +42,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 配置GZip压缩（弱网优化）
+# 当响应大于1KB时自动压缩，减少传输数据量
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 # 全局实例
 config_manager = ConfigManager()
@@ -159,11 +164,9 @@ async def polish_text(request: PolishRequest):
     try:
         logger.info(f"收到润色请求，行号: {request.line_number}")
         
-        # 为每个请求创建独立的AI客户端实例，避免并发问题
-        client = AIClient(config_manager=config_manager)
-        
+        # 复用全局AI客户端实例（Session连接池已经线程安全）
         # 调用AI润色
-        polished_text = client.polish_last_line(
+        polished_text = ai_client.polish_last_line(
             context_lines=request.context_lines,
             target_line=request.target_line,
             style_prompt=request.style_prompt or ""
@@ -216,11 +219,9 @@ async def predict_plot(request: PredictRequest):
         context_text = truncate_context(request.full_text, max_chars=1000)
         logger.info(f"原文长度: {len(request.full_text)}, 截取后长度: {len(context_text)}")
         
-        # 为每个请求创建独立的AI客户端实例，避免并发问题
-        client = AIClient(config_manager=config_manager)
-        
+        # 复用全局AI客户端实例（Session连接池已经线程安全）
         # 调用AI预测，传递截取后的上下文和风格提示词
-        predicted_text = client.predict_plot_continuation(
+        predicted_text = ai_client.predict_plot_continuation(
             context_text,
             style_prompt=request.style_prompt or ""
         )
@@ -350,8 +351,7 @@ async def optimize_prompt(request: OptimizePromptRequest):
     try:
         logger.info("收到提示词优化请求")
         
-        # 为每个请求创建独立的AI客户端实例
-        client = AIClient(config_manager=config_manager)
+        # 复用全局AI客户端实例（Session连接池已经线程安全）
         
         # 构建优化提示词的系统提示
         system_prompt = """你是一位专业的AI提示词（Prompt）工程师，擅长优化和改进用于文本生成的提示词。
@@ -389,15 +389,8 @@ async def optimize_prompt(request: OptimizePromptRequest):
         if request.context:
             user_content += f"\n\n补充说明：{request.context}"
         
-        # 调用AI进行优化
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content}
-        ]
-        
-        # 使用AI客户端的通用方法
-        response = client._call_api(messages, temperature=0.7)
-        optimized_prompt = response.strip()
+        # 调用AI进行优化（使用全局客户端的optimize_prompt方法）
+        optimized_prompt = ai_client.optimize_prompt(request.original_prompt)
         
         return OptimizePromptResponse(
             success=True,
@@ -462,11 +455,9 @@ async def websocket_polish(websocket: WebSocket):
                         "line_number": line_number
                     }, websocket)
                     
-                    # 为每个请求创建独立的AI客户端实例，避免并发问题
-                    client = AIClient(config_manager=config_manager)
-                    
+                    # 复用全局AI客户端实例（Session连接池已经线程安全）
                     # 执行润色
-                    polished_text = client.polish_last_line(
+                    polished_text = ai_client.polish_last_line(
                         context_lines=context_lines,
                         target_line=target_line,
                         style_prompt=style_prompt
@@ -517,11 +508,9 @@ async def websocket_polish(websocket: WebSocket):
                     context_text = truncate_context(full_text, max_chars=1000)
                     logger.info(f"WebSocket预测 - 原文长度: {len(full_text)}, 截取后长度: {len(context_text)}")
                     
-                    # 为每个请求创建独立的AI客户端实例，避免并发问题
-                    client = AIClient(config_manager=config_manager)
-                    
+                    # 复用全局AI客户端实例（Session连接池已经线程安全）
                     # 调用AI预测，传递截取后的上下文和风格提示词
-                    predicted_text = client.predict_plot_continuation(
+                    predicted_text = ai_client.predict_plot_continuation(
                         context_text,
                         style_prompt=style_prompt
                     )
